@@ -1,7 +1,7 @@
 """Vid-Ripper asztali build: Windows (hordozható mappa + zip), Linux (AppImage tar.gz-ben),
-Mac (.app + zip). Ugyanazt a PHDL.py-t építi, a rendszernek megfelelően.
+Mac (.app + zip). Ugyanazt a vidripper.py-t építi, a rendszernek megfelelően.
 
-Használat (a PHDL.py melletti mappából):
+Használat (a vidripper.py melletti mappából):
     python build_desktop.py
 Előfeltétel: pip install pyinstaller pillow sounddevice "yt-dlp[curl-cffi]"
 Windowson az ffmpeg.exe és ffprobe.exe a program mellé kerül: add meg a mappájukat az
@@ -17,7 +17,7 @@ import tarfile
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPT = os.path.join(HERE, "PHDL.py")
+SCRIPT = os.path.join(HERE, "vidripper.py")
 NAME = "Vid-Ripper"
 DIST = os.path.join(HERE, "dist")
 
@@ -81,7 +81,7 @@ def zip_dir(src, dest):
 
 def main():
     if not os.path.exists(SCRIPT):
-        sys.exit("Nem találom a PHDL.py fájlt: " + SCRIPT)
+        sys.exit("Nem találom a vidripper.py fájlt: " + SCRIPT)
     kind = "mac" if sys.platform == "darwin" else ("win" if sys.platform.startswith("win")
                                                    else "linux")
     version = app_version()

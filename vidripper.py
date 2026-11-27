@@ -21,16 +21,21 @@ from datetime import datetime, timezone
 from tkinter import ttk, filedialog
 from tkinter import font as tkfont
 
-APP_NAME = "Vid-Ripper"
-APP_VERSION = "5.1.1"
+APP_VERSION = "5.2"
+# Dev builds ("-dev" in the version) are a separate app with their own name and data folder, so
+# they can be installed next to the public Vid-Ripper without touching its data.
+IS_DEV = "-dev" in APP_VERSION
+APP_NAME = "Vid-Ripper Dev" if IS_DEV else "Vid-Ripper"
 SUPPORT_URL = "https://ko-fi.com/twosix989"
+# Public releases, checked at startup for a newer version.
+RELEASES_API = "https://api.github.com/repos/raam989/Vid-Ripper/releases/latest"
+RELEASES_PAGE = "https://github.com/raam989/Vid-Ripper/releases/latest"
 CREDIT = "app by 2six"
-OLD_APP_NAME = "PH Downloader"  # a régi adatmappa neve, az átvitelhez
+OLD_APP_NAME = "PH Downloader"  # old data folder name, for migration
 
 
-# ========== Platform: minden rendszerfüggő dolog egy helyen ==========
-# A függvények hívásnál nézik a rendszert (nem importnál), így tesztelhetők és egy helyen
-# kell módosítani, ha egy rendszeren valami másképp működik.
+# ========== Platform: everything OS-specific in one place ==========
+# The functions check the OS when called (not at import), so they are testable.
 def is_mac():
     return sys.platform == "darwin"
 
@@ -40,8 +45,8 @@ def is_win():
 
 
 def hide_support_folders():
-    """Windowson, a kész programnál az exe melletti _internal és adatok mappa rejtett lesz,
-    így a mappában csak a Vid-Ripper.exe látszik. Máshol nem csinál semmit."""
+    """On Windows (frozen build) hides the _internal and adatok folders next to the exe, so only
+    Vid-Ripper.exe is visible. Does nothing elsewhere."""
     if not (is_win() and getattr(sys, "frozen", False)):
         return
     try:
@@ -60,10 +65,9 @@ def hide_support_folders():
 
 
 def enable_sharp_scaling():
-    """Windowson nagyobb képernyő-skálázásnál (125%, 150%) a nem DPI-érzékeny program ablakát
-    a rendszer pixelesen nagyítja, ezért homályos. A GDI-skálázásos mód (Windows 10, 1809-től)
-    a szöveget és a rajzot a valódi felbontáson rajzolja, az elrendezés pedig ugyanaz marad.
-    Az első ablak létrehozása ELŐTT kell hívni. Régebbi Windowson nem csinál semmit."""
+    """On Windows with display scaling (125%, 150%) a non-DPI-aware window is bitmap-stretched
+    and blurry. GDI scaling (Windows 10 1809+) renders text and drawing at full resolution
+    while keeping the layout. Must be called BEFORE the first window is created."""
     if not is_win():
         return False
     try:
@@ -76,8 +80,8 @@ def enable_sharp_scaling():
 
 
 def make_quiet_popen(base):
-    """Windowson az ablak nélküli (windowed) programból indított ffmpeg/ffprobe külön fekete
-    konzolablakot nyitna. Ez a Popen minden új folyamatot konzolablak nélkül indít."""
+    """On Windows, ffmpeg/ffprobe started from a windowed app would open a console window. This
+    Popen starts every process without one."""
     CREATE_NO_WINDOW = 0x08000000
 
     class QuietPopen(base):
@@ -89,18 +93,18 @@ def make_quiet_popen(base):
 
 
 if is_win():
-    subprocess.Popen = make_quiet_popen(subprocess.Popen)  # subprocess.run is ezt használja
+    subprocess.Popen = make_quiet_popen(subprocess.Popen)  # subprocess.run uses this too
 
 
-# ---------- nyelv ----------
-# A felület szövegei magyarul vannak a kódban. Az angol és a német fordítás a translations.py
-# fájlban van, ott a magyar szöveg a kulcs. A t() a kiválasztott nyelvű változatot adja
-# vissza; ha egy szövegnek nincs fordítása, a magyar marad.
+# ---------- Language ----------
+# UI strings are written in Hungarian in the code; the English and German translations are in
+# translations.py, keyed by the Hungarian text. t() returns the string in the selected language, or
+# the Hungarian one if there is no translation.
 try:
     import translations as _translations
 except Exception:
     _translations = None
-LANGUAGES = {"hu": "Magyar", "en": "English", "de": "Deutsch"}  # a saját nyelvükön
+LANGUAGES = {"hu": "Magyar", "en": "English", "de": "Deutsch"}  # in their own language
 LANG = "hu"
 _TR = {}
 
@@ -117,7 +121,7 @@ def set_language(code):
 
 
 def system_language():
-    """A rendszer nyelve: hu, de vagy en. Minden más nyelvnél angol."""
+    """The system language: hu, de or en (en for anything else)."""
     import locale
     codes = []
     try:
@@ -145,25 +149,25 @@ def system_language():
     return "en"
 
 
-# Macen a rendszer saját betűtípusa (SF), Windowson a Segoe UI, Linuxon a Helvetica (a Tk
-# a rendszer betűire képezi le)
+# System UI font: SF on macOS, Segoe UI on Windows, Helvetica on Linux (Tk maps it to the system
+# font).
 FONT_FAMILY = ".AppleSystemUIFont" if is_mac() else ("Segoe UI" if is_win() else "Helvetica")
-MOD_KEY = "Command" if is_mac() else "Control"  # a gyorsbillentyűk módosítója
+MOD_KEY = "Command" if is_mac() else "Control"  # modifier key for shortcuts
 BROWSER_NAMES = (["safari"] if is_mac() else []) + ["chrome", "firefox", "edge", "brave"]
 
 
 def linux_bundle_dir():
-    """A Linuxos kész programban (AppImage) a mellécsomagolt segédprogramok mappája, vagy None."""
+    """Folder of the bundled tools in the Linux build (AppImage), or None."""
     if not (getattr(sys, "frozen", False) and sys.platform.startswith("linux")):
         return None
     return os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "_internal", "tools")
 
 
 def _prepare_linux_bundle():
-    """A kész Linuxos programban a PyInstaller a saját könyvtárait teszi az LD_LIBRARY_PATH
-    elejére. Az általunk indított programok (mpv, ffmpeg, fájlkezelő) ezt örökölnék, és rossz
-    könyvtárakat töltenének be, ezért visszaállítjuk az eredetit. A beépített lejátszó
-    hangjához a mellécsomagolt libportaudio-t használjuk, ha a gépen nincs."""
+    """In the Linux build PyInstaller puts its own libraries first on LD_LIBRARY_PATH. Programs
+    we start (mpv, ffmpeg, file manager) would inherit that and load the wrong libraries, so
+    the original value is restored. For the built-in player's audio the bundled libportaudio
+    is used if the system has none."""
     tools = linux_bundle_dir()
     if not tools:
         return
@@ -182,8 +186,8 @@ def _prepare_linux_bundle():
 
 _prepare_linux_bundle()
 
-# A beépített lejátszó hangjához a sounddevice kell (Macen és Windowson a csomag hozza a
-# hangkezelő könyvtárat, Linuxon a libportaudio2 csomag, a kész programban mellé van csomagolva)
+# The built-in player's audio needs sounddevice (bundled on macOS and Windows; on Linux from the
+# libportaudio2 package or the bundled copy).
 try:
     import sounddevice
     HAS_AUDIO = True
@@ -200,7 +204,7 @@ def mpv_hint():
 
 
 def ffmpeg_hint():
-    """Hogyan telepíthető az ffmpeg ezen a rendszeren (hibaüzenetekbe)."""
+    """How to install ffmpeg on this OS (for error messages)."""
     if is_mac():
         return t("Telepítés Macen: brew install ffmpeg")
     if is_win():
@@ -210,35 +214,41 @@ def ffmpeg_hint():
 
 
 def app_dir():
-    """Az app (futtatható fájl vagy forrásfájl) mappája."""
+    """Folder of the app (executable or source file)."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.abspath(__file__))
 
 
 def app_data_dir():
-    """Ide kerülnek a beállítások, az előzmények és a letöltött yt-dlp frissítés.
-    A PHDL_DATA_DIR környezeti változóval felülírható. Windowson a kész (hordozható) program
-    az exe melletti "adatok" mappát használja, így USB-ről is vihető."""
-    override = os.environ.get("PHDL_DATA_DIR")
+    """Where settings, history and the downloaded yt-dlp update are stored. Can be overridden
+    with VIDRIPPER_DATA_DIR (the old PHDL_DATA_DIR still works). The Windows build is
+    portable and uses the "adatok" folder next to the exe."""
+    override = os.environ.get("VIDRIPPER_DATA_DIR") or os.environ.get("PHDL_DATA_DIR")
     if override:
         return override
     home = os.path.expanduser("~")
     if is_mac():
         base = os.path.join(home, "Library", "Application Support")
+        if IS_DEV:
+            return os.path.join(base, APP_NAME)
         return _migrate_data(os.path.join(base, OLD_APP_NAME), os.path.join(base, APP_NAME))
     if is_win():
         if getattr(sys, "frozen", False):
             return os.path.join(app_dir(), "adatok")
         base = os.environ.get("APPDATA") or home
+        if IS_DEV:
+            return os.path.join(base, APP_NAME)
         return _migrate_data(os.path.join(base, OLD_APP_NAME), os.path.join(base, APP_NAME))
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    if IS_DEV:
+        return os.path.join(base, "vid-ripper-dev")
     return _migrate_data(os.path.join(base, "ph-downloader"), os.path.join(base, "vid-ripper"))
 
 
 def _migrate_data(old, new):
-    """Az átnevezés (PH Downloader -> Vid-Ripper) után a régi beállítások, előzmények és
-    bélyegképek átkerülnek az új mappába. A régi mappa megmarad biztonsági másolatnak."""
+    """After the rename (PH Downloader -> Vid-Ripper) copies the old settings, history and
+    thumbnails to the new folder. The old folder is kept as a backup."""
     try:
         if not os.path.exists(new) and os.path.isdir(old):
             shutil.copytree(old, new)
@@ -248,8 +258,8 @@ def _migrate_data(old, new):
 
 
 def saved_language_setting():
-    """A beállításokban mentett nyelv ("auto", "hu", "en" vagy "de"). Már az ablak előtt
-    kell, mert a szövegek egy része betöltéskor készül el."""
+    """The saved language setting ("auto", "hu", "en" or "de"). Needed before the window exists,
+    because some strings are built at import time."""
     try:
         with open(os.path.join(app_data_dir(), "settings.json"), encoding="utf-8") as f:
             value = json.load(f).get("language")
@@ -262,8 +272,8 @@ LANGUAGE_SETTING = saved_language_setting()
 set_language(system_language() if LANGUAGE_SETTING == "auto" else LANGUAGE_SETTING)
 
 def extra_tool_dirs():
-    """Ahol az ffmpeg-et még keressük a PATH mellett. Finderből indítva a Mac nem látja a
-    Homebrew-s ffmpeg-et; Windowson az app mellé tett ffmpeg.exe is megtalálható."""
+    """Extra places to look for ffmpeg besides PATH. Launched from Finder, macOS does not see
+    Homebrew; on Windows an ffmpeg.exe next to the app is found too."""
     if is_mac():
         return ["/opt/homebrew/bin", "/usr/local/bin"]
     if is_win():
@@ -271,21 +281,36 @@ def extra_tool_dirs():
         return [os.path.join(base, "_internal", "tools"), base,
                 os.path.join(base, "ffmpeg"), os.path.join(base, "bin")]
     tools = linux_bundle_dir()
-    if tools:  # AppImage: ha a gépen nincs ffmpeg vagy mpv, a mellécsomagolt indul
+    if tools:  # AppImage: use the bundled ffmpeg/mpv if the system has none
         return [tools, os.path.join(tools, "linux", "usr", "bin")]
     return []
 
 
 LOG_MAX_BYTES = 200_000
+LOG_NAME = "vid-ripper.log"
+OLD_LOG_NAME = "phdl.log"  # old name: renamed at startup, its content is kept
+
+
+def migrate_log():
+    """Renames the old log (phdl.log) to the new name once, if the new one does not exist yet."""
+    base = app_data_dir()
+    for suffix in ("", ".old"):
+        old = os.path.join(base, OLD_LOG_NAME + suffix)
+        new = os.path.join(base, LOG_NAME + suffix)
+        try:
+            if os.path.exists(old) and not os.path.exists(new):
+                os.replace(old, new)
+        except OSError:
+            pass
 
 
 def log_exc(where, exc_info=None, full=False):
-    """Váratlan hiba naplózása (phdl.log az adatmappában). Soha nem dob hibát.
-    Alapból a hiba sora és a helye, `full` esetén a teljes (rövidített) hívási lánc,
-    hogy egy hibabejelentéshez elég legyen a naplót elküldeni."""
+    """Logs an unexpected error to vid-ripper.log in the data folder. Never raises. By default
+    only the failing line and the error; with `full` a shortened traceback, enough for a bug
+    report."""
     try:
         import traceback
-        path = os.path.join(app_data_dir(), "phdl.log")
+        path = os.path.join(app_data_dir(), LOG_NAME)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
             os.replace(path, path + ".old")
@@ -294,7 +319,7 @@ def log_exc(where, exc_info=None, full=False):
         lines = "".join(lines).strip().splitlines()
         if full:
             keep = lines[-24:]
-        else:  # az utolsó hívási hely és maga a hiba
+        else:  # last call site and the error itself
             keep = [ln for ln in lines if ln.lstrip().startswith("File ")][-1:] + lines[-1:]
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {APP_VERSION} {where}: "
@@ -304,8 +329,8 @@ def log_exc(where, exc_info=None, full=False):
 
 
 def install_error_logging(root):
-    """A felület és a háttérszálak váratlan hibái is a naplóba kerülnek (a csomagolt
-    Windows appnál nincs konzol, ott enélkül nyomtalanul elvesznének)."""
+    """Unexpected errors from the UI and background threads go to the log too (the packaged
+    Windows app has no console, they would be lost otherwise)."""
     def ui_error(exc, val, tb):
         log_exc("felület", (exc, val, tb), full=True)
         try:
@@ -324,9 +349,9 @@ def install_error_logging(root):
     threading.excepthook = thread_error
 
 
-# ---------- yt-dlp: az appból letöltött újabb verzió használata ----------
-# Az app a frissítést ide tölti le, indításkor pedig az újabbat használja a beépített
-# (vagy telepített) helyett. Így a kész .app-ot sem kell újraépíteni.
+# ---------- yt-dlp: using a newer version downloaded by the app ----------
+# The app downloads updates here and prefers them over the bundled copy at startup, so the packaged
+# app never needs rebuilding for a yt-dlp update.
 YTDLP_LIB_DIR = os.path.join(app_data_dir(), "yt-dlp-lib")
 
 
@@ -342,7 +367,7 @@ def is_newer(latest, current):
 
 
 def read_lib_version(lib_dir):
-    """A mappában lévő yt-dlp verziója, vagy None, ha nincs ott használható csomag."""
+    """Version of the yt-dlp in this folder, or None if there is no usable package."""
     try:
         with open(os.path.join(lib_dir, "yt_dlp", "version.py"), encoding="utf-8") as f:
             m = re.search(r"""__version__\s*=\s*['"]([^'"]+)['"]""", f.read())
@@ -355,13 +380,13 @@ def _ytdlp_module_names():
     return [k for k in sys.modules if k == "yt_dlp" or k.startswith("yt_dlp.")]
 
 
-# A letöltött verziók külön almappába kerülnek (yt-dlp-lib/<verzió>/yt_dlp), a current.txt
-# mondja meg, melyiket használja az app. Így egy futó app alól sosem cserélődnek ki fájlok.
+# Each downloaded version gets its own folder (yt-dlp-lib/<version>/yt_dlp) and current.txt says
+# which one to use, so files are never replaced under a running app.
 ACTIVE_LIB_DIR = None
 
 
 def current_lib(lib_base):
-    """A használandó, letöltött yt-dlp mappája, vagy None, ha nincs (épkézláb) letöltés."""
+    """Folder of the downloaded yt-dlp to use, or None if there is no valid download."""
     try:
         with open(os.path.join(lib_base, "current.txt"), encoding="utf-8") as f:
             ver = f.read().strip()
@@ -374,8 +399,8 @@ def current_lib(lib_base):
 
 
 def pick_ytdlp(bundled, lib_base=None):
-    """Ha az appból letöltöttünk újabb yt-dlp-t, azt használjuk a beépített helyett.
-    Visszaadja: (a használt modul, megjegyzés hiba esetén vagy None)."""
+    """Uses the downloaded yt-dlp instead of the bundled one if it is newer. Returns (module in
+    use, error note or None)."""
     global ACTIVE_LIB_DIR
     base = lib_base or YTDLP_LIB_DIR
     lib = current_lib(base)
@@ -400,7 +425,7 @@ def pick_ytdlp(bundled, lib_base=None):
         ACTIVE_LIB_DIR = lib
         return new, None
     except Exception:
-        # vissza a beépített verzióra, a hibás letöltést többé nem használjuk
+        # fall back to the bundled version and stop using the broken download
         for k in _ytdlp_module_names():
             del sys.modules[k]
         sys.modules.update(saved_mods)
@@ -422,11 +447,11 @@ try:
 except Exception:
     YTDLP_VERSION = t("ismeretlen")
 
-# a rendszerfüggő extra helyek (Homebrew, az app melletti ffmpeg.exe) a PATH végére
+# OS-specific extra tool locations (Homebrew, ffmpeg.exe next to the app) go to the end of PATH
 for _d in extra_tool_dirs():
     os.environ["PATH"] += os.pathsep + _d
 
-# Böngészőnek álcázás, ha a curl_cffi telepítve van
+# Browser impersonation, if curl_cffi is installed
 try:
     import curl_cffi  # noqa: F401
     from yt_dlp.networking.impersonate import ImpersonateTarget
@@ -434,29 +459,29 @@ try:
 except Exception:
     HAS_IMPERSONATE = False
 
-# Linkek behúzása egérrel az ablakba (a Tk alapból nem tudja, a tkinterdnd2 hozza;
-# ha nincs telepítve, a funkció egyszerűen kimarad)
+# Drag and drop of links (Tk cannot do it alone; tkinterdnd2 adds it, the feature is skipped if it
+# is missing)
 try:
     import tkinterdnd2
     HAS_DND = True
 except Exception:
     HAS_DND = False
 
-# A bélyegkép megjelenítéséhez Pillow kell
+# Pillow is needed to show thumbnails
 try:
     from PIL import Image, ImageDraw, ImageOps, ImageTk
     HAS_PIL = True
 except Exception:
     HAS_PIL = False
 
-# ---------- témák: PH, YT és VD (rendszer), mindegyik sötét és világos változatban ----------
-# Minden szerepnek más a színe egy témán belül, mert váltáskor az érték alapján
-# találjuk meg, melyik szerep színét kell kicserélni (lásd retheme).
-# a kulcsok a mentett beállításokban vannak, ezért maradnak; a nevek semlegesek
+# ---------- Themes, each with a dark and a light variant ----------
+# Every role must have a distinct colour within a theme, because theme switching finds widgets by
+# colour value (see retheme). The keys are stored in the settings, so they stay; the display names
+# are neutral.
 THEME_STYLES = {"VD": t("Alap"), "PH": t("Narancs"), "YT": t("Piros"), "TV": t("Lila")}
-THEME_MODES = ["dark", "light", "system"]  # a "system" a rendszer sötét/világos módját követi
+THEME_MODES = ["dark", "light", "system"]  # "system" follows the OS dark/light mode
 
-# a semleges színek témánként; a kiemelő szín (accent) ezekből számolt szerepei külön jönnek
+# Neutral colours per theme; the roles derived from the accent colour are added separately.
 _NEUTRALS = {
     ("PH", "dark"): dict(
         BG="#1c1c1e", PANEL="#2a2a2d", BORDER="#3d3d41", CONTROL="#38383c",
@@ -478,7 +503,7 @@ _NEUTRALS = {
         CONTROL_HOVER="#e4e4e6", TEXT="#0f0f0f", GREY="#606060", DANGER="#c00010",
         DISABLED_BG="#ececec", DISABLED_FG="#a0a0a0", SCROLL="#c8c8c8", CHIP="#efefef",
         SEG_TRACK="#e9e9e9", SEG_SEL="#fefefe", SIDEBAR="#f1f1f1"),
-    # TV: lila, fekete és fehér
+    # TV: purple, black and white
     ("TV", "dark"): dict(
         BG="#0e0e10", PANEL="#18181b", BORDER="#2f2f35", CONTROL="#26262c",
         CONTROL_HOVER="#35353b", TEXT="#efeff1", GREY="#adadb8", DANGER="#ff6b6b",
@@ -489,7 +514,7 @@ _NEUTRALS = {
         CONTROL_HOVER="#e6e6ea", TEXT="#0e0e10", GREY="#53535f", DANGER="#d4152e",
         DISABLED_BG="#ececef", DISABLED_FG="#a3a3ad", SCROLL="#c4c4cc", CHIP="#efeff2",
         SEG_TRACK="#e8e8ec", SEG_SEL="#fdfdfe", SIDEBAR="#efeff1"),
-    # VD: a rendszerek saját alapszínei (macOS, Windows 11, GNOME/libadwaita)
+    # VD: the platforms' own base colours (macOS, Windows 11, GNOME/libadwaita)
     ("VD-mac", "dark"): dict(
         BG="#1e1e1e", PANEL="#2c2c2e", BORDER="#414144", CONTROL="#3a3a3c",
         CONTROL_HOVER="#4a4a4d", TEXT="#f5f5f7", GREY="#a1a1a6", DANGER="#ff6961",
@@ -522,7 +547,7 @@ _NEUTRALS = {
         SEG_TRACK="#e6e6e9", SEG_SEL="#fefefe", SIDEBAR="#ebebed"),
 }
 
-# a témák kiemelő színe (a VD témánál a rendszer színe felülírja, ha kiolvasható)
+# Accent colour of each theme (VD uses the system accent when it can be read)
 _ACCENTS = {
     ("PH", "dark"): "#ff9001", ("PH", "light"): "#e67e00",
     ("YT", "dark"): "#ff0033", ("YT", "light"): "#e5002d",
@@ -538,7 +563,7 @@ def _hex(c):
 
 
 def _mix(a, b, t):
-    """a és b keveréke: t=0 az a, t=1 a b szín."""
+    """Mix of a and b: t=0 is a, t=1 is b."""
     x, y = _hex(a), _hex(b)
     return "#%02x%02x%02x" % tuple(round(x[i] + (y[i] - x[i]) * t) for i in range(3))
 
@@ -549,7 +574,7 @@ def _luma(c):
 
 
 def _make_unique(pal):
-    """Minden szerepnek eltérő színkód kell (a témaváltás érték alapján cserél)."""
+    """Every role needs a distinct colour code (theme switching replaces colours by value)."""
     seen = set()
     for role in list(pal):
         value = pal[role].lower()
@@ -565,7 +590,7 @@ def _make_unique(pal):
 
 
 def build_palette(key, mode, accent=None):
-    """Egy téma teljes palettája: semleges színek + a kiemelő színből számolt szerepek."""
+    """Full palette of a theme: neutral colours plus the roles derived from the accent."""
     dark = mode == "dark"
     pal = dict(_NEUTRALS[(key, mode)])
     acc = (accent or _ACCENTS[(key, mode)]).lower()
@@ -587,7 +612,7 @@ def vd_key():
     return "VD-mac" if is_mac() else ("VD-win" if is_win() else "VD-linux")
 
 
-_MAC_ACCENTS = {  # AppleAccentColor értékei -> (sötét, világos)
+_MAC_ACCENTS = {  # AppleAccentColor values -> (dark, light)
     "-1": ("#98989d", "#8e8e93"), "0": ("#ff453a", "#ff3b30"), "1": ("#ff9f0a", "#ff9500"),
     "2": ("#ffd60a", "#ffcc00"), "3": ("#32d74b", "#28cd41"), "4": ("#0a84ff", "#007aff"),
     "5": ("#bf5af2", "#af52de"), "6": ("#ff375f", "#ff2d55")}
@@ -605,8 +630,8 @@ def _run_quiet(cmd):
 
 
 def system_appearance():
-    """A rendszer színbeállítása: ("dark" vagy "light", kiemelő szín vagy None).
-    Hiba esetén világos téma és a rendszer alap kiemelő színe."""
+    """The system appearance: ("dark" or "light", accent colour or None). Falls back to light
+    with the default accent."""
     mode, accent = "light", None
     try:
         if is_mac():
@@ -649,14 +674,14 @@ def system_appearance():
 
 
 def needs_system(style, mode):
-    """Kell-e a rendszer beállítása: a VD a rendszer kiemelő színét használja, a "Rendszer"
-    mód pedig a rendszer sötét/világos módját."""
+    """Whether the system settings are needed: VD uses the system accent, "system" mode uses the
+    system dark/light mode."""
     return style == "VD" or mode == "system"
 
 
 def theme_palette(style, mode, system=None):
-    """A választott téma palettája. Minden témánál választható sötét, világos vagy a
-    rendszer szerinti mód; a VD ezen felül a rendszer kiemelő színét is átveszi."""
+    """Palette of the chosen theme. Every theme can be dark, light or follow the system; VD also
+    takes the system accent colour."""
     if needs_system(style, mode):
         sys_mode, accent = system if system else system_appearance()
     else:
@@ -669,23 +694,24 @@ def theme_palette(style, mode, system=None):
 
 
 PALETTES = {"dark": build_palette("PH", "dark"), "light": build_palette("PH", "light")}
-PAL = dict(PALETTES["dark"])  # a most érvényes paletta
+PAL = dict(PALETTES["dark"])  # the palette currently in use
 
 
-SCROLL_FRAME_MS = 8    # görgetéskor legfeljebb ennyi ms-onként mozdul az oldal (120 Hz-es kijelzőhöz)
-SCROLL_WHEEL_PX = 110  # egy görgőkattanás ennyi képpont
-SCROLL_TOUCH_FACTOR = 3  # az érintőpad egy egysége ennyi képpont (Tk 9, Mac)
-SCROLL_EASE = 0.28     # egérgörgőnél képkockánként a hátralévő út ekkora része
-UPDATE_CHECK_INTERVAL_MS = 6 * 3600 * 1000  # 6 óránként újra megnézi az új yt-dlp-t
+SCROLL_FRAME_MS = 8  # minimum ms between scroll frames (suits 120 Hz displays)
+SCROLL_WHEEL_PX = 110  # pixels per mouse wheel notch
+SCROLL_TOUCH_FACTOR = 3  # pixels per touchpad unit (Tk 9, macOS)
+SCROLL_EASE = 0.28  # share of the remaining distance per frame for wheel scrolling
+UPDATE_CHECK_INTERVAL_MS = 6 * 3600 * 1000  # check for a new yt-dlp every 6 hours
+SYS_THEME_POLL_MS = 30_000  # system theme check interval (also checked when the app is activated)
 
 
 def col(name):
-    """Szerepnév (pl. "ACCENT") vagy kész színkód átváltása a mostani téma színére."""
+    """Converts a role name (e.g. "ACCENT") or a colour code to the current theme colour."""
     return PAL.get(name, name)
 
 
 def apply_palette(name):
-    """A színek átállítása: témanév (dark/light) vagy kész paletta (dict)."""
+    """Switches colours: theme name (dark/light) or a ready palette (dict)."""
     PAL.clear()
     PAL.update(name if isinstance(name, dict) else PALETTES.get(name, PALETTES["dark"]))
     globals().update(PAL)
@@ -699,17 +725,17 @@ def hex_rgb(color):
 
 
 def blend_hex(front, back, t):
-    """Két szín keverése: t=1 esetén a front, t=0 esetén a back színe."""
+    """Blends two colours: t=1 gives front, t=0 gives back."""
     f, b = hex_rgb(front), hex_rgb(back)
     mixed = tuple(round(b[i] + (f[i] - b[i]) * t) for i in range(3))
     return "#%02x%02x%02x" % mixed
 
 
-ANIM_SLOW = 2  # az animációk lassítása: 1 az eredeti sebesség, 2 kétszer lassabb
+ANIM_SLOW = 2  # animation slow-down: 1 = original speed, 2 = twice as slow
 
 
 def fade_in(win, steps=8, delay=16 * ANIM_SLOW):
-    """Az ablak áttetszőből fokozatosan átlátszatlanná válik (ahol a rendszer tudja)."""
+    """Fades the window in from transparent (where the OS supports it)."""
     try:
         win.attributes("-alpha", 0.0)
     except Exception:
@@ -746,11 +772,10 @@ THEME_OPTIONS = ("bg", "background", "fg", "foreground", "highlightbackground",
 
 
 def retheme(root, old, new):
-    """Minden ablak és elem színének kicserélése a régi palettáról az újra.
-    Előbb minden elem régi színét kiolvassuk, csak utána cserélünk, és a saját rajzoló
-    elemeket (_retheme) a végén frissítjük. Így egy már átállított szín nem cserélődhet
-    újra, ha véletlenül megegyezik a régi téma egy másik színével (ez okozta, hogy a YT és
-    a VD téma közti váltásnál összekeveredtek a színek)."""
+    """Replaces every widget colour from the old palette with the new one. All old colours are
+    read first and replaced afterwards, and custom-drawn widgets (_retheme) are refreshed
+    last, so a colour already switched can never be switched again when it happens to match
+    another colour of the old theme."""
     table = {}
     for role, value in old.items():
         table.setdefault(value.lower(), new[role])
@@ -785,13 +810,13 @@ def retheme(root, old, new):
                 pass
 
 
-RADIUS = 8  # a gombok lekerekítése; témánként más (set_theme_radius), a kártyáké RADIUS + 4
+RADIUS = 8  # button corner radius; per theme (set_theme_radius), cards use RADIUS + 4
 THEME_RADIUS = {"PH": 10, "YT": 5, "TV": 6, "VD-mac": 9, "VD-win": 5, "VD-linux": 9}
 
 
 def set_theme_radius(style):
-    """A téma karakteréhez illő lekerekítés: a PH kerekebb, a YT szögletesebb,
-    a VD a rendszer szokását követi (Windows 11 kevésbé kerek, macOS és GNOME kerekebb)."""
+    """Corner radius matching the theme: PH rounder, YT squarer, VD follows the platform
+    (Windows 11 less round, macOS and GNOME rounder)."""
     global RADIUS
     RADIUS = THEME_RADIUS.get(vd_key() if style == "VD" else style, 8)
 
@@ -799,9 +824,9 @@ _FONTS = {}
 
 
 def get_font(size, weight="normal", underline=False, family=None):
-    """Közös betűtár: ugyanazt a betűtípus-objektumot nem kell újra és újra létrehozni."""
+    """Shared font cache, so the same font object is not created again and again."""
     root = id(tk._default_root)
-    if _FONTS.get("root") != root:  # új főablak (tesztek): a régi betűk érvénytelenek
+    if _FONTS.get("root") != root:  # new root window (tests): old fonts are invalid
         _FONTS.clear()
         _FONTS["root"] = root
     key = (family or FONT_FAMILY, size, weight, underline)
@@ -819,29 +844,29 @@ def browser_label(name):
 
 AUDIO_LABEL = t("Csak audio (mp3)")
 NO_SUB_LABEL = t("Nincs")
-BEST_LABEL = t("Legjobb elérhető")  # ha az oldal nem árulja el a videó felbontását
+BEST_LABEL = t("Legjobb elérhető")  # when the site does not tell the video resolution
 QUALITIES = ["320 kbps", "256 kbps", "192 kbps", "128 kbps"]
 DEFAULT_QUALITY = "192 kbps"
 
-PLAYER_GEO_RE = re.compile(r"^\d{2,5}x\d{2,5}[+-]\d{1,5}[+-]\d{1,5}$")  # ablak: SZxMA+X+Y
-HISTORY_MAX = 25   # alapértelmezett előzmény-méret
-# az előzmények mérete: (mentett érték, felirat); "all" = korlátlan, 0 = nincs előzmény
+PLAYER_GEO_RE = re.compile(r"^\d{2,5}x\d{2,5}[+-]\d{1,5}[+-]\d{1,5}$")  # window: WxH+X+Y
+HISTORY_MAX = 25  # default history size
+# History size options: (saved value, label); "all" = unlimited, 0 = no history
 HISTORY_LIMITS = [(0, t("Nincs")), (25, "25"), (50, "50"), (100, "100"), ("all", t("Korlátlan"))]
 
 
 def history_cap(value):
-    """A beállított értékből a lista maximális hossza (None: nincs korlát)."""
+    """Maximum list length for the setting (None: unlimited)."""
     return None if value == "all" else value
 FETCH_STALL_SECONDS = 45
 RECENT_MAX = 5
-MAX_PARALLEL = 3   # alapból egyszerre ennyi letöltés fut, a többi vár (Beállítások)
+MAX_PARALLEL = 3  # default number of parallel downloads, the rest wait (Settings)
 PARALLEL_PRESETS = (3, 5, 10)
 PARALLEL_CUSTOM_MAX = 50
 SPEED_CUSTOM_RANGE = (0.1, 1000.0)  # MB/s
-MAX_JOBS = 120     # ennyi nem befejezett letöltés lehet a listában
-PLAYLIST_MAX = 100  # egy lejátszási listából legfeljebb ennyi videót listázunk
+MAX_JOBS = 120  # maximum number of unfinished downloads in the list
+PLAYLIST_MAX = 100  # maximum number of videos listed from a playlist
 DEFAULT_GEOMETRY = "860x820"
-SIDEBAR_WIDTH = 220  # a bal oldali sáv szélessége
+SIDEBAR_WIDTH = 220  # width of the left sidebar
 MIN_SIZE = (540 + SIDEBAR_WIDTH, 720)
 GEOMETRY_RE = re.compile(r"^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$")
 
@@ -850,15 +875,15 @@ def entry_kw():
                 bd=0, highlightthickness=0, font=(FONT_FAMILY, 13))
 
 
-# ---------- segédfüggvények (a felülettől függetlenek) ----------
+# ---------- Helpers (independent of the UI) ----------
 def resource_path(name):
-    """Mellé csomagolt fájl útvonala, futtatva és kész appban is."""
+    """Path of a bundled file, both from source and in the packaged app."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
 
 
 def round_rect(canvas, x1, y1, x2, y2, r, **kw):
-    """Lekerekített téglalap rajzolása vászonra."""
+    """Draws a rounded rectangle on a canvas."""
     r = max(1, min(r, (x2 - x1) / 2, (y2 - y1) / 2))
     pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
            x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
@@ -867,8 +892,8 @@ def round_rect(canvas, x1, y1, x2, y2, r, **kw):
 
 
 def explain_error(msg, cookie_browser="Nincs"):
-    """Közérthető magyarázat a yt-dlp hibaüzenetéhez.
-    Visszaadja: (szöveg, érdemes-e újrapróbálni). A végén a technikai részlet is ott van."""
+    """Plain-language explanation of a yt-dlp error. Returns (text, worth retrying). The
+    technical detail is appended at the end."""
     low = msg.lower()
     detail = " ".join(str(msg).split())
     if len(detail) > 300:
@@ -935,8 +960,8 @@ def explain_error(msg, cookie_browser="Nincs"):
 
 
 def parse_pypi_release(data):
-    """A PyPI JSON válaszból a legfrissebb yt-dlp kiadás adatai.
-    Ha nincs hozzá letölthető wheel, az url és a sha256 üres marad."""
+    """Latest yt-dlp release from the PyPI JSON response. url and sha256 stay empty if there is
+    no downloadable wheel."""
     release = {"version": data["info"]["version"], "url": None, "sha256": None,
                "size": 0, "filename": None}
     for f in data.get("urls") or []:
@@ -950,7 +975,7 @@ def parse_pypi_release(data):
     return release
 
 
-# SponsorBlock: a nézők által jelölt részek YouTube videókban (sponsor.ajay.app)
+# SponsorBlock: viewer-marked segments in YouTube videos (sponsor.ajay.app)
 SPONSORBLOCK_API = "https://sponsor.ajay.app"
 SB_CATEGORIES = {
     "sponsor": "Szponzor",
@@ -972,8 +997,8 @@ def is_youtube(info):
 
 
 def fetch_sponsor_segments(video_id):
-    """A videó SponsorBlock részei: [(kategória, kezdet, vége), ...]. A kérésben csak a
-    videó azonosítójának hash-elejét küldjük el (mint a yt-dlp), hiba esetén üres lista."""
+    """SponsorBlock segments of a video: [(category, start, end), ...]. Only a hash prefix of
+    the video id is sent (like yt-dlp does); returns an empty list on error."""
     import hashlib
     from urllib.parse import quote
     prefix = hashlib.sha256(video_id.encode()).hexdigest()[:4]
@@ -1001,16 +1026,15 @@ def fetch_sponsor_segments(video_id):
 
 
 def sponsor_summary(segments, categories):
-    """(darab, összes hossz másodpercben) a kiválasztott kategóriákra."""
+    """(count, total length in seconds) for the chosen categories."""
     picked = [(s, e) for c, s, e in segments if c in categories]
     return len(picked), sum(e - s for s, e in picked)
 
 
-# ---------- SponsorBlock: kivágás áttűnéssel ----------
-# A sima kivágás hirtelen ugrik. Áttűnéssel minden kivágott rész helyén: 1 mp elsötétülés
-# (a kivágott rész első másodperce), 1 mp fekete kép felirattal, 1 mp visszatűnés (a kivágott
-# rész utolsó másodperce). A videó tartalmából így semmi nem vész el, de az egészet újra
-# kell kódolni, ezért lassabb, mint a sima vágás.
+# ---------- SponsorBlock: cut with fades ----------
+# A plain cut jumps abruptly. With fades every removed part becomes: 1 s fade out (first second of
+# the removed part), 1 s black card with a caption, 1 s fade in (last second of the removed part).
+# The whole file has to be re-encoded, so this is slower than a plain cut.
 SB_FADE_SECONDS = 1.0
 SB_CARD_SECONDS = 1.0
 SB_CARD_FONTS = (
@@ -1023,7 +1047,7 @@ _ENCODERS = None
 
 
 def ffmpeg_encoders():
-    """Az ffmpeg videó- és hangkódolói (egyszer kérdezzük le)."""
+    """The ffmpeg video and audio encoders (queried once)."""
     global _ENCODERS
     if _ENCODERS is None:
         _ENCODERS = set()
@@ -1040,7 +1064,7 @@ def ffmpeg_encoders():
 
 
 def merge_cut_ranges(chapters, duration):
-    """A SponsorBlock részekből egymást nem fedő (kezdet, vége, kategória) sor."""
+    """Non-overlapping (start, end, category) ranges from the SponsorBlock segments."""
     ranges = []
     for ch in chapters or []:
         if ch.get("type", "skip") != "skip":
@@ -1071,7 +1095,7 @@ def sb_card_text(category):
 
 
 def make_sb_card(path, width, height, text):
-    """Fekete kép középen fehér felirattal (Pillow-val, így nem kell az ffmpeg betűkészlete)."""
+    """Black image with a centred white caption (drawn with Pillow, so ffmpeg needs no fonts)."""
     from PIL import ImageFont
     img = Image.new("RGB", (width, height), (0, 0, 0))
     size = max(14, height // 20)
@@ -1097,7 +1121,7 @@ def make_sb_card(path, width, height, text):
 
 
 def probe_media(path):
-    """Hossz, kép (szélesség, magasság, képkocka/mp, pixelformátum, bitráta) és hang."""
+    """Duration, video (width, height, fps, pixel format, bitrate) and audio info."""
     exe = shutil.which("ffprobe")
     if not exe:
         return None
@@ -1132,12 +1156,12 @@ def probe_media(path):
 
 
 def build_fade_plan(duration, cuts, fade=SB_FADE_SECONDS):
-    """Darabok sorrendben: ("clip", kezdet, vége), ("out", k, v), ("card", kategória),
-    ("in", k, v). Mellé az időtérkép: [(régi kezdet, régi vége, új kezdet), ...] a
-    megmaradt részekre, ebből számoljuk át a fejezeteket."""
+    """Pieces in order: ("clip", start, end), ("out", s, e), ("card", category), ("in", s, e).
+    Also returns the time map [(old start, old end, new start), ...] of the kept parts, used
+    to remap the chapters."""
     plan, kept = [], []
-    pos = 0.0   # a régi idővonalon
-    new = 0.0   # az új idővonalon
+    pos = 0.0  # on the old timeline
+    new = 0.0  # on the new timeline
     for start, end, cat in cuts:
         if start - pos >= 0.05:
             plan.append(("clip", pos, start))
@@ -1160,8 +1184,8 @@ def build_fade_plan(duration, cuts, fade=SB_FADE_SECONDS):
 
 
 def remap_chapters(chapters, kept, total):
-    """Az eredeti fejezetek az új idővonalon. A kivágott részbe eső fejezethatár a
-    következő megmaradt rész elejére kerül."""
+    """The original chapters on the new timeline. A chapter boundary inside a removed part moves
+    to the start of the next kept part."""
     def to_new(sec):
         for a, b, off in kept:
             if sec < a:
@@ -1184,15 +1208,15 @@ def remap_chapters(chapters, kept, total):
 
 
 def sponsor_fade_cut(path, cuts, kbps=None, progress=None, should_stop=None):
-    """Újrakódolja a fájlt a kivágásokkal és az áttűnésekkel. Visszaadja az időtérképet
-    és az új hosszt, vagy kivételt dob (ilyenkor marad a sima vágás)."""
+    """Re-encodes the file with the cuts and fades. Returns the time map and the new duration,
+    or raises (the plain cut is used then)."""
     exe = shutil.which("ffmpeg")
     media = probe_media(path)
     if not exe or not media or not media["duration"]:
         raise RuntimeError("ffmpeg/ffprobe")
     video, audio, duration = media["video"], media["audio"], media["duration"]
     if video and (not HAS_PIL or "10" in video["pix_fmt"] or "12" in video["pix_fmt"]):
-        raise RuntimeError("HDR")  # HDR-nél a fekete-fehér felirat színei nem lennének jók
+        raise RuntimeError("HDR")  # the black and white card colours would be wrong for HDR
     encs = ffmpeg_encoders()
     if video:
         if is_mac() and "h264_videotoolbox" in encs:
@@ -1259,10 +1283,10 @@ def sponsor_fade_cut(path, cuts, kbps=None, progress=None, should_stop=None):
         root, ext = os.path.splitext(path)
         out = root + ".fade" + ext
         if len(graph) < 20000:
-            # közvetlenül adjuk át: a régi -filter_complex_script az ffmpeg 8-tól megszűnt
+            # pass it inline: -filter_complex_script was removed in ffmpeg 8
             args += ["-filter_complex", graph]
         else:
-            # nagyon sok vágásnál fájlból (Windowson korlátos a parancssor hossza), ffmpeg 7+
+            # for very many cuts use a file (Windows limits the command line length), ffmpeg 7+
             script = os.path.join(work, "filter.txt")
             with open(script, "w", encoding="utf-8") as fh:
                 fh.write(graph)
@@ -1301,8 +1325,8 @@ def sponsor_fade_cut(path, cuts, kbps=None, progress=None, should_stop=None):
 
 
 class SponsorFadePP(yt_dlp.postprocessor.PostProcessor):
-    """yt-dlp utófeldolgozó: a SponsorBlock részek kivágása áttűnéssel. Ha nem sikerül
-    (nincs megfelelő kódoló, HDR videó, ffmpeg hiba), a megszokott sima vágás fut le."""
+    """yt-dlp postprocessor: removes SponsorBlock segments with fades. If that fails (no
+    suitable encoder, HDR video, ffmpeg error) the regular plain cut runs instead."""
 
     def __init__(self, downloader=None, categories=(), kbps=None, progress=None,
                  should_stop=None, on_fallback=None):
@@ -1340,9 +1364,9 @@ yt_dlp.postprocessor.postprocessors.value["SponsorFadePP"] = SponsorFadePP
 
 
 class SafeEmbedThumbnailPP(yt_dlp.postprocessor.EmbedThumbnailPP):
-    """Borítókép a fájlba, de ha az ffmpeg nem tudja beletenni (furcsa képformátum vagy
-    tároló, egyes oldalaknál mindig), a letöltés nem bukik el: a videó borító nélkül
-    elkészül, a kép törlődik."""
+    """Embeds the thumbnail, but if ffmpeg cannot (odd image format or container, always on some
+    sites) the download does not fail: the video is kept without a cover and the image is
+    deleted."""
 
     def __init__(self, downloader=None, already_have_thumbnail=False, on_fail=None):
         super().__init__(downloader, already_have_thumbnail)
@@ -1366,8 +1390,37 @@ class SafeEmbedThumbnailPP(yt_dlp.postprocessor.EmbedThumbnailPP):
 yt_dlp.postprocessor.postprocessors.value["SafeEmbedThumbnailPP"] = SafeEmbedThumbnailPP
 
 
+def app_version_key(v):
+    """Sortable key: 5.1.1 < 5.2-dev1 < 5.2-dev2 < 5.2 < 5.2.1."""
+    m = re.match(r"^v?(\d+(?:\.\d+)*)(?:-dev(\d+))?$", str(v or "").strip())
+    if not m:
+        return None
+    nums = tuple(int(x) for x in m.group(1).split("."))
+    nums = nums + (0,) * (3 - len(nums))
+    return (nums, 0, int(m.group(2))) if m.group(2) else (nums, 1, 0)
+
+
+def fetch_app_release():
+    """Latest public Vid-Ripper version from GitHub (e.g. "5.2"), or None on error."""
+    try:
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+            data = json.loads(ydl.urlopen(yt_dlp.networking.Request(
+                RELEASES_API, headers={"Accept": "application/vnd.github+json"})).read())
+        if data.get("draft") or data.get("prerelease"):
+            return None
+        tag = str(data.get("tag_name") or "").lstrip("v")
+        return tag if app_version_key(tag) else None
+    except Exception:
+        return None
+
+
+def app_update_available(latest, current=None):
+    new, cur = app_version_key(latest), app_version_key(current or APP_VERSION)
+    return bool(new and cur and new > cur)
+
+
 def fetch_ytdlp_release():
-    """A legfrissebb yt-dlp kiadás adatai a PyPI-ról. Hiba esetén None."""
+    """Latest yt-dlp release info from PyPI, or None on error."""
     try:
         with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
             data = json.loads(ydl.urlopen("https://pypi.org/pypi/yt-dlp/json").read())
@@ -1377,7 +1430,7 @@ def fetch_ytdlp_release():
 
 
 def download_ytdlp_wheel(release, progress=None):
-    """A wheel letöltése. A fájl sha256 összegének egyeznie kell a PyPI-n megadottal."""
+    """Downloads the wheel. Its sha256 must match the one published on PyPI."""
     if not release.get("url") or not release.get("sha256"):
         raise RuntimeError(t("A PyPI nem ad letölthető csomagot ehhez a verzióhoz."))
     buf = io.BytesIO()
@@ -1402,9 +1455,9 @@ def download_ytdlp_wheel(release, progress=None):
 
 
 def install_ytdlp_wheel(data, lib_base, expected_version):
-    """A wheelből csak az yt_dlp mappát csomagolja ki egy új, verziószámos mappába, majd
-    átírja a current.txt-t. A futó app által használt mappához nem nyúl, hiba esetén a
-    korábbi telepítés érintetlen marad."""
+    """Extracts only the yt_dlp folder from the wheel into a new versioned folder, then updates
+    current.txt. Never touches the folder used by the running app; on error the previous
+    install stays intact."""
     if (not expected_version or expected_version.startswith(".")
             or "/" in expected_version or "\\" in expected_version):
         raise RuntimeError(t("Érvénytelen verziószám."))
@@ -1445,7 +1498,7 @@ def install_ytdlp_wheel(data, lib_base, expected_version):
     except Exception:
         shutil.rmtree(new_dir, ignore_errors=True)
         raise
-    # a régi verziók törlése, kivéve a most futó appét
+    # delete old versions, except the one the running app uses
     keep = {expected_version}
     if ACTIVE_LIB_DIR:
         keep.add(os.path.basename(os.path.realpath(ACTIVE_LIB_DIR)))
@@ -1460,8 +1513,8 @@ LINUX_DONE_SOUND = "/usr/share/sounds/freedesktop/stereo/complete.oga"
 
 
 def play_done_sound(root=None):
-    """Rövid hangjelzés a kész letöltésnél: Macen rendszerhang, Windowson a rendszer
-    értesítő hangja, Linuxon a szokásos értesítő hang (ha van), különben a rendszer csengője."""
+    """Short sound when downloads finish: system sound on macOS and Windows, the freedesktop
+    sound on Linux (if present), otherwise the bell."""
     try:
         if is_mac() and os.path.exists(DONE_SOUND):
             subprocess.Popen(["afplay", DONE_SOUND], stdout=subprocess.DEVNULL,
@@ -1485,9 +1538,9 @@ def play_done_sound(root=None):
 
 
 def reveal_path(path):
-    """A fájl megmutatása a fájlkezelőben (Finder, Intéző, Linuxon a mappa megnyitása).
-    Visszaadja: "file", ha a fájlt megmutatta; "folder", ha a fájl már nincs meg, ezért a
-    mappáját nyitotta meg; None, ha egyik sincs meg vagy a megnyitás nem sikerült."""
+    """Shows the file in the file manager (Finder, Explorer; on Linux opens the folder). Returns
+    "file" if the file was shown, "folder" if only its folder exists and was opened, None if
+    neither exists or opening failed."""
     folder = os.path.dirname(path)
     if os.path.exists(path):
         kind = "file"
@@ -1496,7 +1549,7 @@ def reveal_path(path):
         elif is_win():
             cmd = ["explorer", "/select," + os.path.normpath(path)]
         else:
-            cmd = ["xdg-open", folder]  # Linuxon nincs általános "kijelölés": a mappát nyitjuk
+            cmd = ["xdg-open", folder]  # Linux has no generic "select file": open the folder
     elif os.path.isdir(folder):
         kind = "folder"
         cmd = ["open", folder] if is_mac() else (["explorer", os.path.normpath(folder)]
@@ -1504,7 +1557,7 @@ def reveal_path(path):
     else:
         return None
     try:
-        # az Intéző akkor is 1-gyel tér vissza, ha sikerült, ezért ott nem nézzük a kilépési kódot
+        # Explorer returns 1 even on success, so the exit code is not checked there
         subprocess.run(cmd, timeout=10, check=not is_win(), stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL)
         return kind
@@ -1513,13 +1566,13 @@ def reveal_path(path):
 
 
 def remove_history_entries(history, indices):
-    """Az előzmények listája a megadott sorszámú elemek nélkül (több kijelölt törlése)."""
+    """The history without the entries at the given indices (deleting several selected)."""
     drop = set(indices)
     return [e for i, e in enumerate(history) if i not in drop]
 
 
 def clean_name_part(text):
-    """Fájlnévbe nem illő karakterek törlése, szóközök helyett alulvonás."""
+    """Removes characters not allowed in file names and replaces spaces with underscores."""
     text = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", text or "")
     text = re.sub(r"\s+", "_", text.strip())
     text = re.sub(r"_{2,}", "_", text)
@@ -1527,7 +1580,7 @@ def clean_name_part(text):
 
 
 def upload_date_prefix(info):
-    """Feltöltés dátuma éééé_hh_nn formában. Ha nincs adat, a mai dátum."""
+    """Upload date as yyyy_mm_dd, or today if unknown."""
     d = str(info.get("upload_date") or info.get("release_date") or "")
     if re.fullmatch(r"\d{8}", d):
         return f"{d[:4]}_{d[4:6]}_{d[6:]}"
@@ -1540,18 +1593,35 @@ def upload_date_prefix(info):
     return datetime.now().strftime("%Y_%m_%d")
 
 
-def build_basename(info, height=None, hdr=False):
-    """A mentett fájl neve kiterjesztés nélkül: éééé_hh_nn_videó_címe_1080p
-    (a felbontás csak videónál kerül bele, hangnál nem)."""
+# File name layout (Settings). The resolution always goes at the end, so the same video in two
+# qualities does not overwrite itself.
+NAME_STYLES = {"date_title": t("Dátum_Cím (alap)"), "title": t("Cím"),
+               "uploader_title": t("Feltöltő_Cím"), "title_date": t("Cím_Dátum")}
+NAME_STYLE = "date_title"  # from the settings (VidRipper.__init__, set_name_style)
+
+
+def build_basename(info, height=None, hdr=False, style=None):
+    """File name without extension, by default yyyy_mm_dd_video_title_1080p (the resolution only
+    for video, not audio)."""
     title = clean_name_part(info.get("title")) or "nevtelen_video"
-    base = f"{upload_date_prefix(info)}_{title}"[:150].rstrip("._")
+    style = style or NAME_STYLE
+    if style == "title":
+        base = title
+    elif style == "uploader_title":
+        who = clean_name_part(info.get("uploader") or info.get("channel"))
+        base = f"{who}_{title}" if who else title
+    elif style == "title_date":
+        base = f"{title}_{upload_date_prefix(info)}"
+    else:
+        base = f"{upload_date_prefix(info)}_{title}"
+    base = base[:150].rstrip("._") or "nevtelen_video"
     name = f"{base}_{height}p" if height else base
     return name + "_HDR" if hdr else name
 
 
 def collect_playlist_entries(info):
-    """A lejátszási lista (vagy csatorna) videóinak egyszerű listája:
-    [{"url", "title", "uploader", "duration"}, ...]. A fülek, privát és törölt videók kimaradnak."""
+    """Simple list of the videos of a playlist or channel: [{"url", "title", "uploader",
+    "duration"}, ...]. Tabs, private and deleted videos are skipped."""
     out, seen = [], set()
 
     def walk(entries, depth):
@@ -1583,7 +1653,7 @@ def collect_playlist_entries(info):
 
 
 def find_videos_tab(info):
-    """Csatorna főoldalnál a "Videók" fül linkje, ha a lista csak füleket tartalmaz."""
+    """On a channel home page, the link of the "Videos" tab if the list contains only tabs."""
     for e in info.get("entries") or []:
         if isinstance(e, dict):
             url = str(e.get("url") or "")
@@ -1593,8 +1663,8 @@ def find_videos_tab(info):
 
 
 def format_height(f):
-    """Egy formátum magassága. Ha az oldal nem adja meg közvetlenül, a felbontás
-    szövegéből (1280x720, 720p) próbáljuk kiolvasni."""
+    """Height of a format. If the site does not give it directly, it is parsed from the
+    resolution text (1280x720, 720p)."""
     h = f.get("height")
     if isinstance(h, (int, float)) and h > 0:
         return int(h)
@@ -1606,7 +1676,7 @@ def format_height(f):
 
 
 def video_heights(info):
-    """(felbontások csökkenő sorrendben, van-e egyáltalán letölthető videó)."""
+    """(heights in descending order, whether there is any downloadable video)."""
     formats = info.get("formats") or []
     video = [f for f in formats if f.get("vcodec") != "none"
              and not (f.get("acodec") not in (None, "none") and f.get("ext") in ("m4a", "mp3", "opus", "ogg"))]
@@ -1616,19 +1686,19 @@ def video_heights(info):
 
 
 def is_hdr_format(f):
-    """HDR a videóformátum? (a yt-dlp dynamic_range mezője: HDR10, HLG, HDR10+, DV)"""
+    """Is this an HDR format? (yt-dlp dynamic_range: HDR10, HLG, HDR10+, DV)"""
     dr = str(f.get("dynamic_range") or "").upper()
     return f.get("vcodec") not in (None, "none") and bool(dr) and dr != "SDR"
 
 
 def hdr_heights(info):
-    """A HDR-ben elérhető felbontások csökkenő sorrendben (üres, ha nincs HDR)."""
+    """Heights available in HDR, descending (empty if none)."""
     hs = {format_height(f) for f in (info.get("formats") or []) if is_hdr_format(f)}
     return sorted((h for h in hs if h), reverse=True)
 
 
 def hdr_format_selector(height):
-    """yt-dlp formátumválasztó HDR-hez: a kért magasságig a HDR videó, ha nincs, a sima."""
+    """yt-dlp format selector for HDR: HDR video up to the height, otherwise SDR."""
     lim = f"[height<=?{height}]" if height else ""
     return (f"bv*[dynamic_range!=SDR]{lim}+ba"
             f"/bv*{lim}+ba/b{lim}/b")
@@ -1640,8 +1710,8 @@ JUNK_WORDS = ("preview", "trailer", "thumb", "sample", "teaser", "poster", "spri
 
 
 def find_media_urls(text):
-    """Videófájl linkek (m3u8, mp4) egy oldal kódjából, az elkerült (\\/) alakokat is megtalálja.
-    Az előnézeti, mintaklipek a lista végére kerülnek, az m3u8 előre."""
+    """Video links (m3u8, mp4) in a page's source, including escaped (\\/) forms. Preview and
+    sample clips go last, m3u8 first."""
     text = (text.replace("\\/", "/").replace("\\u0026", "&").replace("&amp;", "&")
             .replace("\\u002F", "/"))
     seen, urls = set(), []
@@ -1659,8 +1729,8 @@ def find_media_urls(text):
 
 
 def sniff_media_urls(fetch, page_url, max_pages=6):
-    """Az oldal és a benne lévő iframe-ek kódját átnézi videólinkek után.
-    fetch(url, referer) a lap szövegét adja vissza (vagy hibát dob)."""
+    """Scans the page and its iframes for video links. fetch(url, referer) returns the page text
+    (or raises)."""
     from urllib.parse import urljoin
     found, queue, done = [], [(page_url, None, 0)], set()
     while queue and len(done) < max_pages:
@@ -1684,7 +1754,8 @@ def sniff_media_urls(fetch, page_url, max_pages=6):
 
 
 def page_title_from_url(url):
-    """Tartalék cím, ha sem az oldal, sem a videó nem ad: az URL utolsó értelmes darabja."""
+    """Fallback title when neither the page nor the video has one: the last meaningful part of
+    the URL."""
     from urllib.parse import urlparse, unquote
     path = unquote(urlparse(url).path).rstrip("/")
     name = path.rsplit("/", 1)[-1] or urlparse(url).netloc
@@ -1701,7 +1772,7 @@ def format_duration(seconds):
 
 
 def parse_timecode(text):
-    """Időpont szövegből másodpercbe: "90", "1:30", "1:02:03", "1.30" is jó. Hibásnál None."""
+    """Time text to seconds: "90", "1:30", "1:02:03" and "1.30" all work. None if invalid."""
     text = (text or "").strip().replace(".", ":").replace(",", ":")
     if not text:
         return None
@@ -1718,7 +1789,7 @@ def parse_timecode(text):
 
 
 def clip_suffix(start, end):
-    """A kijelölt rész a fájlnévben: _1m30s-2m45s (órával: _1h02m05s-...)."""
+    """The selected part in the file name: _1m30s-2m45s (with hours: _1h02m05s-...)."""
     def part(sec):
         h, rem = divmod(int(sec), 3600)
         m, s = divmod(rem, 60)
@@ -1747,9 +1818,9 @@ def _sub_lang_name(code, formats=None):
 
 
 def subtitle_choices(info):
-    """A videó letölthető feliratai: [(kulcs, felirat), ...]. A kulcs "nyelv" vagy
-    "auto:nyelv" (automatikus felirat). Az automatikusból csak az eredeti nyelvű és a
-    magyar fordítás kerül a listába, a többi száz nyelv csak zavarna."""
+    """Downloadable subtitles: [(key, label), ...]. The key is "lang" or "auto:lang" (automatic
+    captions). Of the automatic ones only the original language and the Hungarian translation
+    are listed, the other hundred languages would just clutter the menu."""
     info = info or {}
     out, seen = [], set()
     subs = info.get("subtitles") or {}
@@ -1775,6 +1846,37 @@ def subtitle_choices(info):
     return out
 
 
+def pick_subtitle(info, pref):
+    """For playlists: the subtitle key for the wanted language ("orig" = the video's own
+    language, "hu", "en"), or None. The uploader's own subtitles win over automatic ones."""
+    if pref not in ("orig", "hu", "en"):
+        return None
+    choices = [key for key, _ in subtitle_choices(info)]
+    manual = [k for k in choices if not k.startswith("auto:")]
+    auto = [k for k in choices if k.startswith("auto:")]
+    lang = str((info or {}).get("language") or "").split("-")[0].lower()
+    want = lang if pref == "orig" else pref
+    if want:
+        for k in manual:
+            if k.split("-")[0].lower() == want:
+                return k
+        for k in auto:
+            if k[5:].split("-")[0].lower() == want:
+                return k
+    if pref == "orig":  # unknown language: the automatic original-language captions
+        return next((k for k in auto if k.endswith("-orig")), None)
+    return None
+
+
+def is_youtube_url(url):
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url or "").hostname or "").lower()
+    except ValueError:
+        return False
+    return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
+
 def format_size(nbytes, exact):
     mb = nbytes / 1024 / 1024
     if mb >= 1024:
@@ -1787,7 +1889,7 @@ def format_size(nbytes, exact):
 
 
 def _format_bytes(f, duration):
-    """Egy formátum mérete: (bájt, pontos-e). Ha nem ismert: (None, False)."""
+    """Size of a format: (bytes, exact). Unknown: (None, False)."""
     if f.get("filesize"):
         return f["filesize"], True
     if f.get("filesize_approx"):
@@ -1799,13 +1901,13 @@ def _format_bytes(f, duration):
 
 
 def estimate_size(info, height, hdr=False):
-    """A letöltés becsült mérete a kiválasztott felbontásnál: (bájt, pontos-e) vagy None."""
+    """Estimated download size at the chosen height: (bytes, exact) or None."""
     formats = info.get("formats") or []
     duration = info.get("duration")
     videos = [f for f in formats
-              if f.get("height") == height and f.get("vcodec") != "none"
+              if format_height(f) == height and f.get("vcodec") != "none"
               and (not hdr or is_hdr_format(f))]
-    if not hdr:  # sima letöltésnél a HDR változatot nem számoljuk, ha van sima is
+    if not hdr:  # for a normal download ignore the HDR variant if there is an SDR one
         sdr = [f for f in videos if not is_hdr_format(f)]
         videos = sdr or videos
     if not videos:
@@ -1814,7 +1916,7 @@ def estimate_size(info, height, hdr=False):
     size, exact = _format_bytes(video, duration)
     if size is None:
         return None
-    if video.get("acodec") == "none":  # külön hangsáv is kell
+    if video.get("acodec") == "none":  # a separate audio track is needed too
         audios = [f for f in formats
                   if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")]
         if audios:
@@ -1828,17 +1930,18 @@ def estimate_size(info, height, hdr=False):
 
 
 def estimate_audio_size(info, kbps):
-    """Az mp3 becsült mérete bájtban, a hossz és a bitráta alapján. Ha nincs hossz: None."""
+    """Estimated mp3 size in bytes from duration and bitrate. None without a duration."""
     duration = (info or {}).get("duration")
     if not duration:
         return None
     return kbps * 1000 / 8 * duration
 
 
-# ---------- beállítások és előzmények (a felülettől függetlenek) ----------
+# ---------- Settings and history (independent of the UI) ----------
 SETTINGS_FILE = os.path.join(app_data_dir(), "settings.json")
 HISTORY_FILE = os.path.join(app_data_dir(), "history.json")
 THUMB_DIR = os.path.join(app_data_dir(), "thumbs")
+QUEUE_FILE = os.path.join(app_data_dir(), "queue.json")  # the interrupted download queue
 THUMB_NAME_RE = re.compile(r"^[0-9a-f]{16}\.jpg$")
 
 
@@ -1854,7 +1957,7 @@ def load_json(path, default):
 
 
 def save_json(path, data):
-    """Biztonságos mentés: előbb ideiglenes fájlba ír, majd átnevezi."""
+    """Safe save: writes a temporary file first, then renames it."""
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".tmp"
@@ -1867,14 +1970,22 @@ def save_json(path, data):
         return False
 
 
-LOCK_ITERS = 200_000          # a jelszó hash-elésének lassítása találgatás ellen
+LOCK_ITERS = 200_000  # slows down password hashing against guessing
 LOCK_MIN_LEN = 4
-LOCK_IDLE_MINUTES = 4         # ennyi tétlenség után újra jelszót kér (Olivér kérése, fix)
-LOCK_MAX_FAILS = 5            # ennyi hibás próba után rövid várakozás jön
+LOCK_IDLE_MINUTES = 4  # ask for the password again after this much inactivity (fixed)
+LOCK_MAX_FAILS = 5  # after this many wrong attempts a short wait follows
 LOCK_WAIT_SECONDS = 30
 
 
 CHANGELOG = [
+    ("5.2", [
+        t("Az Előzmények oldal új neve Könyvtár, és gyorsabb lett: hosszú listánál sem akad meg letöltés vagy témaváltás közben."),
+        t("A félbemaradt letöltések a következő indításkor folytatódnak."),
+        t("Lejátszási listánál is kérhető felirat és SponsorBlock."),
+        t("A fájlnév felépítése a Beállításokban választható."),
+        t("Az app szól, ha új verzió érhető el."),
+        t("Hibajavítások."),
+    ]),
     ("5.1.1", [t("Hibajavítások.")]),
     ("5.1", [t("Hibajavítások, az első nyilvános kiadás.")]),
     ("5.0.3", [t("Ablak átméretezéssel kapcsolatos hibák javítása")]),
@@ -1959,7 +2070,7 @@ CHANGELOG = [
 ]
 
 
-# A Névjegy ablak szövege: rövid bemutatás és a funkciók fontossági sorrendben
+# Text of the About window: a short intro and the features by importance
 ABOUT_INTRO = t("Videó- és zeneletöltő Macre, Windowsra és Linuxra. Bemásolod a linket, "
                 "a többit az app intézi.")
 ABOUT_FEATURES = [
@@ -1984,7 +2095,7 @@ ABOUT_FEATURES = [
 
 
 def make_lock(password, iters=LOCK_ITERS):
-    """A jelszóból sózott hash készül, magát a jelszót sehol sem tároljuk."""
+    """Builds a salted hash from the password; the password itself is never stored."""
     salt = os.urandom(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters)
     return {"salt": salt.hex(), "hash": digest.hex(), "iters": iters}
@@ -2011,7 +2122,7 @@ PLAYER_ENGINES = {"mpv": t("mpv (ajánlott)"), "builtin": t("ffmpeg (kompatibili
 
 
 def sanitize_settings(raw, default_folder):
-    """A mentett beállítások ellenőrzése, hibás érték helyett az alapérték marad."""
+    """Validates the saved settings; invalid values fall back to the default."""
     out = {"cookie_browser": "Nincs", "folder": default_folder, "geometry": None,
            "recent_folders": [], "theme": "system", "style": "VD",
            "history_lock": None, "notify_popup": True, "notify_sound": True, "toast_anim": "fade",
@@ -2020,14 +2131,15 @@ def sanitize_settings(raw, default_folder):
            "player_geom_video": None, "player_geom_audio": None, "language": "auto",
            "embed_metadata": True, "sb_mode": "remove", "sb_categories": list(SB_DEFAULT),
            "speed_limit": SPEED_LIMIT_DEFAULT, "speed_limit_on": False,
-           "speed_custom": False, "max_parallel": MAX_PARALLEL, "parallel_custom": False}
+           "speed_custom": False, "max_parallel": MAX_PARALLEL, "parallel_custom": False,
+           "name_style": "date_title"}
     if not isinstance(raw, dict):
         return out
     recent = raw.get("recent_folders")
     if isinstance(recent, list):
         out["recent_folders"] = [f for f in recent if isinstance(f, str) and f][:RECENT_MAX]
-    # a régi "browser" kulcsot szándékosan nem vesszük át: abban még a régi,
-    # automatikusan mentett "safari" lehet, az újnál az alapérték a "Nincs"
+    # the old "browser" key is deliberately ignored: it may still hold an automatically saved
+    # "safari", the new default is "Nincs" (none)
     if raw.get("cookie_browser") in BROWSERS:
         out["cookie_browser"] = raw["cookie_browser"]
     if isinstance(raw.get("embed_metadata"), bool):
@@ -2038,13 +2150,15 @@ def sanitize_settings(raw, default_folder):
         out["speed_limit"] = lim
     par = raw.get("max_parallel")
     if isinstance(par, int) and not isinstance(par, bool) and 0 <= par <= PARALLEL_CUSTOM_MAX:
-        out["max_parallel"] = par  # 0: korlátlan
+        out["max_parallel"] = par  # 0: unlimited
     if raw.get("parallel_custom") is True:
         out["parallel_custom"] = True
     if raw.get("speed_custom") is True:
         out["speed_custom"] = True
     if isinstance(raw.get("speed_limit_on"), bool):
         out["speed_limit_on"] = raw["speed_limit_on"]
+    if raw.get("name_style") in NAME_STYLES:
+        out["name_style"] = raw["name_style"]
     if raw.get("sb_mode") in SB_MODES:
         out["sb_mode"] = raw["sb_mode"]
     if isinstance(raw.get("sb_categories"), list):
@@ -2055,7 +2169,7 @@ def sanitize_settings(raw, default_folder):
         out["theme"] = raw["theme"]
     if raw.get("style") in THEME_STYLES:
         out["style"] = raw["style"]
-    elif raw.get("incognito") is True:  # a régi inkognitó mód helyett a YT téma
+    elif raw.get("incognito") is True:  # the old incognito mode becomes the YT theme
         out["style"] = "YT"
     for key in ("notify_popup", "notify_sound"):
         if raw.get(key) is False:
@@ -2065,7 +2179,7 @@ def sanitize_settings(raw, default_folder):
     if valid_lock(raw.get("history_lock")):
         out["history_lock"] = {k: raw["history_lock"][k] for k in ("salt", "hash", "iters")}
     if isinstance(raw.get("temp_dir"), str) and raw["temp_dir"].strip():
-        out["temp_dir"] = raw["temp_dir"]  # a mappa hiánya használatkor derül ki, nem törlünk
+        out["temp_dir"] = raw["temp_dir"]  # a missing folder is detected when used, nothing is deleted
     for key in ("player_geom_video", "player_geom_audio"):
         geo = raw.get(key)
         if isinstance(geo, str) and PLAYER_GEO_RE.match(geo):
@@ -2073,7 +2187,8 @@ def sanitize_settings(raw, default_folder):
     if isinstance(raw.get("player_engine"), str) and raw["player_engine"] in PLAYER_ENGINES:
         out["player_engine"] = raw["player_engine"]
     vol = raw.get("player_volume")
-    if isinstance(vol, (int, float)) and not isinstance(vol, bool) and 0 <= vol <= 1:
+    # mpv allows up to 130% volume, remember that too (the built-in player caps at 100%)
+    if isinstance(vol, (int, float)) and not isinstance(vol, bool) and 0 <= vol <= 1.3:
         out["player_volume"] = float(vol)
     if isinstance(raw.get("seen_version"), str) and raw["seen_version"]:
         out["seen_version"] = raw["seen_version"][:20]
@@ -2090,7 +2205,7 @@ def sanitize_settings(raw, default_folder):
         m = GEOMETRY_RE.match(geometry)
         if m:
             w, h, x, y = (int(v) for v in m.groups())
-            # a képernyőn kívülre került ablakot nem állítjuk vissza
+            # do not restore a window that ended up off screen
             if (MIN_SIZE[0] <= w <= 4000 and MIN_SIZE[1] <= h <= 3000
                     and -w + 100 < x < 8000 and 0 <= y < 5000):
                 out["geometry"] = geometry
@@ -2098,10 +2213,19 @@ def sanitize_settings(raw, default_folder):
 
 
 def add_recent_folder(recent, folder, limit=None):
-    """A most használt mappa kerül előre, ismétlődés nélkül, legfeljebb 5 darab."""
+    """Puts the folder just used first, without duplicates, at most 5."""
     limit = limit or RECENT_MAX
     folder = os.path.normpath(folder)
     return ([folder] + [f for f in recent if os.path.normpath(f) != folder])[:limit]
+
+
+ENTRY_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def new_entry_id():
+    """Permanent id of a history entry (selection and opening refer to it rather than to the
+    list index, which shifts with every new download)."""
+    return os.urandom(6).hex()
 
 
 def clean_history(raw, limit=HISTORY_MAX):
@@ -2109,14 +2233,19 @@ def clean_history(raw, limit=HISTORY_MAX):
         return []
     items = [h for h in raw if isinstance(h, dict)
              and isinstance(h.get("name"), str) and isinstance(h.get("path"), str)]
+    seen = set()
     for h in items:
         if not (isinstance(h.get("thumb"), str) and THUMB_NAME_RE.match(h["thumb"])):
             h.pop("thumb", None)
+        # older entries get an id here; invalid or duplicate ids are replaced
+        if not (isinstance(h.get("id"), str) and ENTRY_ID_RE.match(h["id"])) or h["id"] in seen:
+            h["id"] = new_entry_id()
+        seen.add(h["id"])
     return items if limit is None else items[:limit]
 
 
 def save_thumb(data, thumb_dir=None):
-    """A bélyegkép kis JPEG másolatának mentése az előzményekhez. Fájlnév vagy None."""
+    """Saves a small JPEG copy of the thumbnail for the history. File name or None."""
     if not (HAS_PIL and data):
         return None
     thumb_dir = thumb_dir or THUMB_DIR
@@ -2132,7 +2261,7 @@ def save_thumb(data, thumb_dir=None):
 
 
 def thumb_file(entry, thumb_dir=None):
-    """Az előzmény-bejegyzés bélyegképének útvonala, ha van és létezik."""
+    """Path of the entry's thumbnail, if it has one and the file exists."""
     name = entry.get("thumb")
     if not (isinstance(name, str) and THUMB_NAME_RE.match(name)):
         return None
@@ -2141,7 +2270,7 @@ def thumb_file(entry, thumb_dir=None):
 
 
 def prune_thumbs(history, thumb_dir=None):
-    """Törli azokat a bélyegképeket, amelyekre már nem hivatkozik előzmény."""
+    """Deletes thumbnails no history entry refers to."""
     thumb_dir = thumb_dir or THUMB_DIR
     keep = {h.get("thumb") for h in history}
     try:
@@ -2156,14 +2285,15 @@ def prune_thumbs(history, thumb_dir=None):
 
 
 def add_history_entry(history, entry, limit=HISTORY_MAX):
-    """Az új letöltés kerül előre. Ugyanarra a fájlra csak egy bejegyzés marad."""
+    """Puts the new download first. Only one entry is kept per file."""
+    entry.setdefault("id", new_entry_id())
     rest = [h for h in history if h.get("path") != entry.get("path")]
     items = [entry] + rest
     return items if limit is None else items[:limit]
 
 
 def history_label(entry):
-    """Az előzmények listában látszó szöveg: "Feltöltő neve - fájlnév"."""
+    """Text shown in the history list: "Uploader - file name"."""
     uploader = " ".join(str(entry.get("uploader") or "").split()) or t("ismeretlen")
     return f"{uploader} - {entry['name']}"
 
@@ -2183,15 +2313,15 @@ HU_MONTHS = ["január", "február", "március", "április", "május", "június",
 
 
 def _fold(text):
-    """Kisbetűs, ékezet nélküli szöveg a kereséshez (a "ő" és az "o" egyformának számít)."""
+    """Lower-case text without accents for searching ("ő" matches "o")."""
     import unicodedata
     text = unicodedata.normalize("NFKD", str(text).casefold())
     return "".join(c for c in text if not unicodedata.combining(c))
 
 
 def history_search_text(entry):
-    """Minden, amire az előzményekben rá lehet keresni: feltöltő, cím (fájlnév), a letöltés
-    dátuma többféle írásmóddal, a weboldal neve és a link."""
+    """Everything the history search looks at: uploader, title (file name), download date in
+    several formats, site name and link."""
     parts = [entry.get("uploader") or "", entry.get("name") or "", entry.get("url") or ""]
     try:
         from urllib.parse import urlparse
@@ -2202,7 +2332,7 @@ def history_search_text(entry):
             parts.append(host)
             labels = host.split(".")
             if len(labels) >= 2:
-                parts.append(labels[-2])  # pl. "youtube" a "youtube.com"-ból
+                parts.append(labels[-2])  # e.g. "youtube" from "youtube.com"
     except ValueError:
         pass
     try:
@@ -2216,7 +2346,7 @@ def history_search_text(entry):
 
 
 def history_matches(entry, query):
-    """Igaz, ha a keresőszöveg minden szava szerepel a bejegyzés adataiban."""
+    """True if every word of the query appears in the entry."""
     words = _fold(query).split()
     if not words:
         return True
@@ -2231,13 +2361,13 @@ HIST_FILTERS = [("all", t("Minden")), ("video", t("Csak videó")), ("audio", t("
 
 
 def entry_kind(entry):
-    """"audio" a hanganyagnak (mp3 stb.), különben "video"."""
+    """"audio" for audio files (mp3 etc.), otherwise "video"."""
     return "audio" if str(entry.get("path") or entry.get("name") or "").lower().endswith(
         AUDIO_EXTS) else "video"
 
 
 def history_view(history, query="", sort="date", kind="all"):
-    """A látszó sorok indexei: szűrve (keresés, típus) és rendezve."""
+    """Indices of the visible rows: filtered (search, type) and sorted."""
     idx = [i for i, e in enumerate(history)
            if history_matches(e, query) and (kind == "all" or entry_kind(e) == kind)]
     if sort == "name":
@@ -2249,19 +2379,19 @@ def history_view(history, query="", sort="date", kind="all"):
     return idx
 
 
-HIST_PROBE_MAX = 60    # egy körben legfeljebb ennyi régi videó hosszát pótoljuk
-HIST_CHUNK = 8         # ennyi kártya épül egyszerre (a többi apránként, a háttérben)
-HIST_PAGE = 100        # ennyi kártya látszik egyszerre az Előzményekben ("Továbbiak" gomb)
-THUMB_BIG = (224, 126)     # az Előzmények kártyáinak bélyegképe
+HIST_PROBE_MAX = 60  # fill in the duration of at most this many old videos per round
+HIST_CHUNK = 8  # cards built at once (the rest are built in small batches in the background)
+HIST_PAGE = 100  # cards shown at once in the history ("Show more" button)
+THUMB_BIG = (224, 126)  # thumbnail size of the history cards
 
 
 def ok_color():
-    """Zöld a "kész" jelzéshez, a sötét vagy világos témához illően."""
+    """Green for the "done" state, matching the dark or light theme."""
     return "#30d158" if sum(hex_rgb(PAL.get("BG", "#000000"))) < 384 else "#248a3d"
 
 
 def site_label(url):
-    """A weboldal rövid neve a linkből (pl. YouTube, Twitch), vagy üres szöveg."""
+    """Short site name from a link (e.g. YouTube, Twitch), or an empty string."""
     try:
         from urllib.parse import urlparse
         host = (urlparse(url or "").hostname or "").lower()
@@ -2280,26 +2410,26 @@ def site_label(url):
 
 
 def copyable_text(parent, value, fg=None, font=None, on_click=None):
-    """Feliratnak látszó, de egérrel kijelölhető és másolható szöveg (csak olvasható mező).
-    `on_click`: sima kattintásra ez fut (pl. link megnyitása); húzással ettől még kijelölhető."""
+    """Text that looks like a label but can be selected and copied (read-only entry). `on_click`
+    runs on a plain click (e.g. open a link); dragging still selects."""
     var = tk.StringVar(value=value)
     entry = tk.Entry(parent, textvariable=var, state="readonly", readonlybackground=PANEL,
                      fg=fg or TEXT, relief="flat", bd=0, highlightthickness=0,
                      selectbackground=ACCENT, selectforeground=ACCENT_FG,
                      font=font or get_font(12), cursor="hand2" if on_click else "xterm")
-    entry.var = var  # a változót tartani kell
+    entry.var = var  # keep a reference to the variable
     add_context_menu(entry)
     if on_click:
         def released(_e):
-            if not entry.selection_present():  # nem kijelölés volt, hanem kattintás
+            if not entry.selection_present():  # a click, not a selection
                 on_click()
         entry.bind("<ButtonRelease-1>", released, add="+")
     return entry
 
 
 def entry_upload_date(entry):
-    """Az eredeti feltöltés dátuma szövegként: a mentett adatból, vagy a fájlnév elejéről
-    (a fájlnév ééé_hh_nn_ kezdetű)."""
+    """Original upload date as text: from the saved data, or from the start of the file name
+    (yyyy_mm_dd_)."""
     raw = str(entry.get("upload_date") or "")
     m = re.match(r"(\d{4})(\d{2})(\d{2})$", raw) or \
         re.match(r"(\d{4})_(\d{2})_(\d{2})_", os.path.basename(entry.get("name") or ""))
@@ -2314,7 +2444,7 @@ def entry_upload_date(entry):
 
 
 def extract_links(text):
-    """A szövegben talált http(s) linkek sorrendben, ismétlés nélkül."""
+    """http(s) links found in the text, in order, without duplicates."""
     out = []
     for m in re.findall(r"https?://[^\s<>\"']+", text or ""):
         if m not in out:
@@ -2323,15 +2453,29 @@ def extract_links(text):
 
 
 def norm_url(url):
-    """Összehasonlításhoz: kisbetűs gép, a # utáni rész és a záró / nélkül."""
+    """For comparison: lower-case host, without the #fragment and the trailing /."""
     from urllib.parse import urldefrag, urlsplit
     url = urldefrag(str(url or "").strip())[0].rstrip("/")
     parts = urlsplit(url)
     return url.replace(parts.netloc, parts.netloc.lower(), 1) if parts.netloc else url
 
 
+def unique_basename(folder, basename, ext, taken=()):
+    """A free file name: if the folder already has a file with this name (or another download
+    took it) _2, _3 ... is appended. Otherwise yt-dlp would skip the download as "already
+    downloaded" and the app would report the old file as done."""
+    def used(name):
+        return name in taken or os.path.exists(os.path.join(folder, name + ext))
+    if not used(basename):
+        return basename
+    n = 2
+    while used(f"{basename}_{n}"):
+        n += 1
+    return f"{basename}_{n}"
+
+
 def find_downloaded(history, url, missing=()):
-    """A korábbi letöltés ehhez a linkhez, ha van és a fájlja még megvan."""
+    """The earlier download of this link, if any and its file still exists."""
     key = norm_url(url)
     for e in history:
         if e.get("url") and norm_url(e["url"]) == key and e.get("path") not in missing:
@@ -2340,7 +2484,7 @@ def find_downloaded(history, url, missing=()):
 
 
 class DownloadJob:
-    """Egy letöltés a sorban: adatai, állapota és a hozzá tartozó felületi elemek."""
+    """One download in the queue: its data, state and UI widgets."""
     _counter = 0
 
     def __init__(self, url, height, folder, basename, audio, kbps, uploader, thumb, extra_opts, hdr=False):
@@ -2359,20 +2503,20 @@ class DownloadJob:
         self.ui = None
         self.retry_ok = True
         self.failed_counted = False
-        self.source_url = url  # az eredeti oldal linkje (a letöltés lehet közvetlen videólinkről)
-        self.title = ""   # a videó eredeti címe (az értesítéshez és az előzményhez)
-        self.entry = None  # az előzmény-bejegyzés, ha kész
-        self.lazy = False  # lejátszási listás videó: az adatait csak indításkor kérjük le
-        self.clip = None   # (kezdet, vége) másodpercben, ha csak egy részt töltünk le
-        self.sub = None    # a letöltendő felirat kulcsa ("en" vagy "auto:en-orig")
-        self.live = False             # élő adás felvétele
-        self.live_from_start = False  # az adás elejétől (csak YouTube)
-        self.live_started = None      # mikor indult a felvétel (time.monotonic)
-        self.stop_event = threading.Event()  # Leállítás és mentés
+        self.source_url = url  # link of the original page (the download may use a direct video link)
+        self.title = ""  # original video title (for the notification and the history)
+        self.entry = None  # the history entry once done
+        self.lazy = False  # playlist item: its details are fetched only when it starts
+        self.clip = None  # (start, end) in seconds when only a part is downloaded
+        self.sub = None  # key of the subtitle to download ("en" or "auto:en-orig")
+        self.live = False  # recording a live stream
+        self.live_from_start = False  # from the start of the stream (YouTube only)
+        self.live_started = None  # when recording started (time.monotonic)
+        self.stop_event = threading.Event()  # Stop and save
         self.thread_id = None
-        self.work_dir = None          # ahol a félkész fájlok vannak
-        self.sponsorblock = None      # (mód, kategóriák), ha a SponsorBlock be van kapcsolva
-        self.embed_meta = True        # borító, cím, előadó, fejezetek a fájlba
+        self.work_dir = None  # where the partial files are
+        self.sponsorblock = None  # (mode, categories) when SponsorBlock is on
+        self.embed_meta = True  # embed cover, title, artist and chapters
 
     @property
     def ext(self):
@@ -2387,8 +2531,68 @@ class DownloadJob:
         return self.state in ("waiting", "active")
 
 
+# Queue persistence: waiting and running downloads continue at the next start after quitting (or a
+# crash). Live recordings do not, they cannot be resumed later.
+QUEUE_KEYS = ("url", "source_url", "height", "folder", "basename", "audio", "kbps", "uploader",
+              "title", "hdr", "clip", "sub", "sponsorblock", "embed_meta", "upload_date",
+              "duration", "lazy", "sub_pref")
+
+
+def job_to_dict(job):
+    """Saveable data of a download, or None (live stream, finished or failed download)."""
+    if job.live or not job.unfinished:
+        return None
+    data = {k: getattr(job, k, None) for k in QUEUE_KEYS}
+    data["referer"] = ((job.extra_opts or {}).get("http_headers") or {}).get("Referer")
+    return data
+
+
+def job_from_dict(data, extra_opts):
+    """Rebuilds a DownloadJob from saved data, or None if the data is invalid or the target
+    folder is gone."""
+    try:
+        url, folder, base = data["url"], data["folder"], data["basename"]
+        if not (isinstance(url, str) and url.startswith(("http://", "https://"))
+                and isinstance(folder, str) and os.path.isdir(folder)
+                and isinstance(base, str) and base and os.sep not in base
+                and "/" not in base and not base.startswith(".")):
+            return None
+        height = data.get("height")
+        height = height if isinstance(height, int) and not isinstance(height, bool) else None
+        kbps = data.get("kbps")
+        kbps = kbps if isinstance(kbps, int) and 32 <= kbps <= 320 else int(DEFAULT_QUALITY.split()[0])
+        opts = dict(extra_opts)
+        if isinstance(data.get("referer"), str):
+            opts["http_headers"] = {**(opts.get("http_headers") or {}), "Referer": data["referer"]}
+        job = DownloadJob(url, height, folder, base, bool(data.get("audio")), kbps,
+                          str(data.get("uploader") or ""), None, opts, bool(data.get("hdr")))
+        src = data.get("source_url")
+        job.source_url = src if isinstance(src, str) and src.startswith(("http://", "https://")) \
+            else url
+        job.title = str(data.get("title") or "")
+        job.upload_date = str(data.get("upload_date") or "")
+        dur = data.get("duration")
+        job.duration = dur if isinstance(dur, (int, float)) and not isinstance(dur, bool) else None
+        clip = data.get("clip")
+        if isinstance(clip, list) and len(clip) == 2 and all(
+                isinstance(x, (int, float)) for x in clip) and 0 <= clip[0] < clip[1]:
+            job.clip = (clip[0], clip[1])
+        if isinstance(data.get("sub"), str):
+            job.sub = data["sub"]
+        if data.get("sub_pref") in ("orig", "hu", "en"):
+            job.sub_pref = data["sub_pref"]
+        sb = data.get("sponsorblock")
+        if isinstance(sb, list) and len(sb) == 2 and sb[0] in SB_MODES and isinstance(sb[1], list):
+            job.sponsorblock = (sb[0], [c for c in sb[1] if c in SB_CATEGORIES])
+        job.embed_meta = data.get("embed_meta") is not False
+        job.lazy = data.get("lazy") is True
+        return job
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def live_state(info):
-    """"live" ha az adás most megy, "upcoming" ha még nem kezdődött el, egyébként None."""
+    """"live" if the stream is on now, "upcoming" if it has not started yet, otherwise None."""
     info = info or {}
     status = info.get("live_status")
     if info.get("is_live") or status == "is_live":
@@ -2399,25 +2603,25 @@ def live_state(info):
 
 
 def can_record_from_start(info):
-    """Az adás elejétől csak YouTube-on lehet felvenni (a yt-dlp csak ott tudja)."""
+    """Recording from the start only works on YouTube (yt-dlp supports it only there)."""
     key = str((info or {}).get("extractor_key") or (info or {}).get("extractor") or "")
     return key.lower().startswith("youtube")
 
 
-# Élő adásnál a yt-dlp az ffmpeg-et indítja, és megvárja, amíg az kilép. A leállításhoz
-# kell az ffmpeg folyamat: egy "q" betűre rendesen lezárja a fájlt, és a yt-dlp a felvett
-# részt kész videónak tekinti. Ezért a yt-dlp ffmpeg-indítását figyeljük, szálanként.
+# For live streams yt-dlp starts ffmpeg and waits for it to exit. Stopping needs that ffmpeg
+# process: on "q" it closes the file properly and yt-dlp treats the recording as a finished video.
+# So we track the ffmpeg processes yt-dlp starts, per thread.
 _LIVE_PROCS = {}
 _LIVE_LOCK = threading.Lock()
 
-# ---------- sebességkorlát ----------
-# A korlát az összes letöltésre együtt vonatkozik, futás közben is átállítható. A yt-dlp
-# saját korlátja (ratelimit) induláskor rögzül, és darabolt letöltésnél (HLS, DASH) nem is
-# frissíthető, ezért a letöltő lassító függvényét cseréljük: letöltésenként egy közös
-# "mikor jöhet a következő bájt" időpont, a közös keretet a futó letöltések között osztjuk el.
-SPEED_LIMITS_MB = (1, 2, 5, 10, 20, 50)   # a lista; egyéni érték is megadható
+# ---------- Speed limit ----------
+# The limit applies to all downloads together and can be changed while they run. yt-dlp's own
+# ratelimit is fixed at start and cannot be updated for fragmented downloads (HLS, DASH), so the
+# downloader's throttle function is replaced: each download keeps a "next byte allowed at" time and
+# the shared budget is split between running downloads.
+SPEED_LIMITS_MB = (1, 2, 5, 10, 20, 50)  # presets; a custom value is allowed too
 SPEED_LIMIT_DEFAULT = 5
-_SPEED = {"total": None, "active": lambda: 1}   # total: bájt/mp, vagy None (nincs korlát)
+_SPEED = {"total": None, "active": lambda: 1}  # total: bytes/s, or None (no limit)
 _SPEED_LOCK = threading.Lock()
 
 
@@ -2439,14 +2643,14 @@ def _job_rate(job):
 
 
 def fmt_mb(value):
-    """5 -> "5", 2.5 -> "2,5" (magyarul vesszővel), angolul ponttal."""
+    """5 -> "5", 2.5 -> "2,5" (comma in Hungarian and German), dot in English."""
     value = float(value)
     txt = str(int(value)) if value.is_integer() else f"{value:g}"
     return txt.replace(".", ",") if LANG in ("hu", "de") else txt
 
 
 def parse_number(text):
-    """Szám a mezőből: vessző is lehet tizedesjel, a mértékegység elhagyható."""
+    """Number from a text field: comma works as decimal separator, the unit is optional."""
     try:
         return float(str(text).strip().lower().replace("mb/s", "").replace(",", ".").strip())
     except ValueError:
@@ -2483,7 +2687,7 @@ def install_speed_limit():
     @staticmethod
     def best_block_size(elapsed_time, bytes):
         size = orig_block(elapsed_time, bytes)
-        # korlátnál kisebb darabokban olvasunk, így egyenletes a sebesség, nem lökésszerű
+        # read in smaller blocks under a limit, so the speed is smooth rather than bursty
         return min(size, 128 * 1024) if _SPEED["total"] else size
 
     FileDownloader.slow_down = slow_down
@@ -2491,12 +2695,12 @@ def install_speed_limit():
     FileDownloader._vr_speed = True
 
 
-# ---------- témához illő app ikon ----------
-# Az alap ikon (icon.png): fekete négyzet, fehér VID, narancs RIP. A többi téma változata
-# ebből készül futás közben (a betűk maszkként), így nem kell külön ikonfájl.
+# ---------- App icon matching the theme ----------
+# The base icon (icon.png): black square, white VID, orange RIP. The other themes' variants are
+# made from it at runtime (the letters used as masks), so no extra icon files are needed.
 THEME_ICON_COLORS = {
-    # (háttér, VID, RIP, a RIP mögötti sáv vagy None); mind az alap ikon elrendezése,
-    # csak a RIP színe követi a témát
+    # (background, VID, RIP, pill behind RIP or None); all keep the base layout, only the RIP
+    # colour follows the theme
     "VD": None,
     "PH": ("#1d1d1f", "#ffffff", "#ff9001", None),
     "YT": ("#1d1d1f", "#ffffff", "#ff3347", None),
@@ -2505,19 +2709,51 @@ THEME_ICON_COLORS = {
 _ICON_CACHE = {}
 
 
+def dev_badge(img):
+    """Adds a DEV badge to the bottom right corner of the dev build's icon."""
+    from PIL import ImageFont
+    out = img.copy()
+    w = out.size[0]
+    k = w / 1024
+    dr = ImageDraw.Draw(out)
+    box = (560 * k, 800 * k, 1000 * k, 990 * k)
+    dr.rounded_rectangle(box, radius=60 * k, fill="#ffd60a")
+    font = None
+    for name in ("Helvetica-Bold.ttf", "Arial Bold.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf",
+                 "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"):
+        try:
+            font = ImageFont.truetype(name, int(130 * k))
+            break
+        except OSError:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+    dr.text(((box[0] + box[2]) / 2, (box[1] + box[3]) / 2), "DEV", fill="#000000",
+            font=font, anchor="mm")
+    return out
+
+
 def theme_icon(style, base_path):
-    """A témához illő ikon Pillow képként (RGBA), vagy None."""
+    """Icon matching the theme as a Pillow RGBA image, or None. With a DEV badge in dev builds."""
     if style in _ICON_CACHE:
         return _ICON_CACHE[style]
+    out = _theme_icon(style, base_path)
+    if IS_DEV and out is not None:
+        out = dev_badge(out)
+    _ICON_CACHE[style] = out
+    return out
+
+
+def _theme_icon(style, base_path):
     from PIL import ImageChops
     src = Image.open(base_path).convert("RGBA")
     colors = THEME_ICON_COLORS.get(style)
     if not colors:
-        _ICON_CACHE[style] = src
         return src
     bg_c, vid_c, rip_c, pill_c = colors
     r, g, b, alpha = src.split()
-    dark = 0x1d  # az alap ikon hátterének fényessége
+    dark = 0x1d  # brightness of the base icon's background
     scale = 255 / (255 - dark)
     rip = ImageChops.subtract(r, b).point(lambda v: min(255, int(v * scale)))
     low = ImageChops.darker(ImageChops.darker(r, g), b)
@@ -2534,13 +2770,12 @@ def theme_icon(style, base_path):
                 (x0 - 34 * k, y0 - 26 * k, x1 + 34 * k, y1 + 26 * k), radius=36 * k, fill=pill_c)
     out.paste(Image.new("RGBA", src.size, vid_c), (0, 0), vid)
     out.paste(Image.new("RGBA", src.size, rip_c), (0, 0), rip)
-    _ICON_CACHE[style] = out
     return out
 
 
 def mac_set_dock_icon(png_path):
-    """Macen a Dock ikon közvetlenül az AppKit-en át (NSApp setApplicationIconImage:).
-    A Tk iconphoto-ja induláskor néha későn vagy egyáltalán nem hatott, ez kiszámítható."""
+    """Sets the macOS Dock icon directly through AppKit (NSApp setApplicationIconImage:). Tk's
+    iconphoto sometimes applied late or not at all at startup; this is reliable."""
     import ctypes
     import ctypes.util
     objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
@@ -2599,7 +2834,7 @@ def install_live_tracking():
 
 
 def live_elapsed(job):
-    """A felvétel eddigi ideje szövegként (0:00-tól)."""
+    """Recording time so far as text (from 0:00)."""
     secs = int(time.monotonic() - (job.live_started or time.monotonic()))
     h, rem = divmod(max(0, secs), 3600)
     m, sec = divmod(rem, 60)
@@ -2607,7 +2842,7 @@ def live_elapsed(job):
 
 
 def live_len(seconds):
-    """Hossz szövegként: 45 mp, 1:45, 1:02:03."""
+    """Length as text: 45 s, 1:45, 1:02:03."""
     secs = int(round(seconds))
     if secs < 60:
         return t("{n} mp").format(n=secs)
@@ -2630,20 +2865,21 @@ def kill_procs(procs):
 
 
 def kill_all_tracked():
-    """Kilépéskor: a yt-dlp által indított ffmpeg folyamatok ne fussanak tovább a háttérben."""
+    """On quit: make sure the ffmpeg processes started by yt-dlp do not keep running."""
     with _LIVE_LOCK:
         procs = [p for lst in _LIVE_PROCS.values() for p in lst if p.poll() is None]
     kill_procs(procs)
 
 
-# Kijelölt rész: a pontos vágáshoz a yt-dlp újrakódol. Az ffmpeg alapbeállítása (libx264
-# "medium") nagyon lassú és minden magot leterhel; helyette gyors, jó minőségű beállítás.
+# Selected part: yt-dlp re-encodes for an exact cut. ffmpeg's default (libx264 "medium") is very
+# slow and loads every core; a fast, good-quality setting is used instead.
 CLIP_VIDEO_BITRATE = ((2160, "35M"), (1440, "18M"), (1080, "10M"), (720, "6M"), (0, "4M"))
 
 
 def clip_encode_args(height, progress_file):
-    """Az ffmpeg kimeneti kapcsolói a kijelölt rész letöltéséhez, a haladás egy fájlba megy.
-    None, ha nincs gyors kódoló: ilyenkor kulcskép-pontos vágás lesz újrakódolás nélkül."""
+    """ffmpeg output options for downloading a selected part, with progress written to a file.
+    None if there is no fast encoder: then a keyframe-accurate cut without re-encoding is
+    used."""
     encs = ffmpeg_encoders()
     if is_mac() and "h264_videotoolbox" in encs:
         rate = next(r for h, r in CLIP_VIDEO_BITRATE if (height or 1080) >= h)
@@ -2657,7 +2893,7 @@ def clip_encode_args(height, progress_file):
 
 
 def read_ffmpeg_progress(path):
-    """Az ffmpeg -progress fájljából az eddig elkészült rész hossza másodpercben."""
+    """Length done so far in seconds, from ffmpeg's -progress file."""
     try:
         with open(path, "rb") as fh:
             fh.seek(max(0, os.path.getsize(path) - 2048))
@@ -2674,12 +2910,12 @@ def read_ffmpeg_progress(path):
 
 
 class DownloadCancelled(Exception):
-    """A felhasználó megszakította a letöltést vagy a lekérést."""
+    """The user cancelled the download or the fetch."""
 
 
 class FetchLogger:
-    """Csendes naplózó a videóadatok lekéréséhez. A yt-dlp minden lépésnél ide ír,
-    megszakításkor pedig kivételt dobunk, így a lekérés azonnal kilép."""
+    """Quiet logger for fetching video info. yt-dlp writes here at every step, and raising an
+    exception on cancel makes the fetch stop immediately."""
 
     def __init__(self, cancel_event, on_message=None):
         self.cancel_event = cancel_event
@@ -2710,13 +2946,13 @@ class FetchLogger:
         pass
 
 
-FETCH_CAP = 90  # az adatlekérés becsült haladása eddig a százalékig nőhet, amíg tart
+FETCH_CAP = 90  # the estimated fetch progress can grow up to this percentage while it runs
 
 
 def advance_fetch_pct(pct, msg):
-    """A yt-dlp üzenetéből becsli, hol tart a lekérés. Pontos százalék nem érhető el,
-    ezért minden "Downloading ..." lépés a hátralévő út egy részét teljesíti.
-    Visszaadja: (új százalék, a lépés magyar neve vagy None)."""
+    """Estimates the fetch progress from yt-dlp's messages. There is no real percentage, so each
+    "Downloading ..." step covers part of the remaining way. Returns (new percentage, step
+    name or None)."""
     low = str(msg).lower()
     if "extracting url" in low:
         return max(pct, 5), t("Link megnyitása")
@@ -2734,26 +2970,28 @@ def advance_fetch_pct(pct, msg):
 
 
 def is_partial_file(name, basename):
-    """Félkész (ideiglenes) fájl-e a yt-dlp-től ehhez a letöltéshez.
-    A kész, korábban letöltött basename.mp4 fájlt sosem érinti."""
+    """Whether this is a partial (temporary) yt-dlp file of this download. Never matches the
+    finished basename.mp4."""
     if not name.startswith(basename + "."):
         return False
     suffix = name[len(basename):]
-    if suffix.lower().endswith(SUB_EXTS):  # felirat (pl. .fr.srt), nem a videó darabja
+    if suffix.lower().endswith(SUB_EXTS):  # subtitle (e.g. .fr.srt), not part of the video
         return False
     if suffix.endswith((".part", ".ytdl")) or ".part-Frag" in suffix:
         return True
     if suffix.startswith(".temp."):
         return True
-    # külön videó- és hangsáv, pl. .f137.mp4 vagy .f140.m4a
+    # separate video and audio track, e.g. .f137.mp4 or .f140.m4a
     return re.match(r"^\.f[\w-]+\.\w+$", suffix) is not None
 
 
 SUB_EXTS = (".srt", ".vtt", ".ass", ".ttml", ".srv3", ".json3")
+# side files next to the video (cover, metadata): never the finished download
+SIDE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".json", ".description", ".txt")
 
 
 def subtitle_files(folder, basename):
-    """A videóhoz tartozó feliratfájlok (basename.nyelv.srt) útvonalai."""
+    """Paths of the video's subtitle files (basename.lang.srt)."""
     try:
         names = os.listdir(folder)
     except OSError:
@@ -2774,7 +3012,7 @@ def delete_subtitle_files(folder, basename):
 
 
 def delete_partial_files(folder, basename):
-    """Törli a félkész fájlokat, visszaadja a törölt fájlok számát."""
+    """Deletes the partial files and returns how many were deleted."""
     count = 0
     try:
         names = os.listdir(folder)
@@ -2790,14 +3028,26 @@ def delete_partial_files(folder, basename):
     return count
 
 
-TEMP_DIR_NAME = "Vid-Ripper-temp"
-OLD_TEMP_DIR_NAME = "PH-Downloader-temp"  # a 4.5 előtti név, csak a takarításhoz
+def delete_new_output(job):
+    """On cancel, deletes the file that was already downloaded but cancelled during post-
+    processing (e.g. fades). Only touches a file created by this download."""
+    path = find_output_file(job.folder, job.basename, job.ext)
+    try:
+        if os.path.isfile(path) and os.path.getmtime(path) >= getattr(job, "run_started", 1e18) - 2:
+            os.remove(path)
+            return 1
+    except OSError:
+        pass
+    return 0
+
+
+TEMP_DIR_NAME = "Vid-Ripper-Dev-temp" if IS_DEV else "Vid-Ripper-temp"
 TEMP_PARENT = os.path.join(tempfile.gettempdir(), TEMP_DIR_NAME)
 
 
 def temp_parent(base=None):
-    """A letöltések ideiglenes mappáinak szülője: a megadott mappán belül egy saját almappa.
-    Ha a megadott mappa nem használható (például hiányzik a külső lemez), az alapértelmezett."""
+    """Parent of the downloads' temporary folders: our own subfolder in the given folder, or the
+    default if that folder is unusable (e.g. an external drive is missing)."""
     if base:
         try:
             if os.path.isdir(base) and os.access(base, os.W_OK):
@@ -2809,48 +3059,43 @@ def temp_parent(base=None):
 
 
 def make_job_temp(base=None):
-    """Új, üres ideiglenes mappa egy letöltésnek."""
+    """A new, empty temporary folder for one download."""
     parent = temp_parent(base)
     os.makedirs(parent, exist_ok=True)
     return tempfile.mkdtemp(prefix="job_", dir=parent)
 
 
 def cleanup_old_temp(base=None, max_age=24 * 3600):
-    """Indításkor törli a korábbi, félbemaradt letöltések ideiglenes mappáit. Csak a saját
-    "job_" mappáinkhoz nyúl, az alapértelmezett és a megadott helyen is."""
+    """At startup deletes the temporary folders of earlier interrupted downloads. Only touches
+    our own "job_" folders, in the default and in the custom location."""
     limit = time.time() - max_age
     roots = {tempfile.gettempdir()} | ({base} if base else set())
     for root in roots:
-        for dir_name in (TEMP_DIR_NAME, OLD_TEMP_DIR_NAME):
-            parent = os.path.join(root, dir_name)
-            old = dir_name == OLD_TEMP_DIR_NAME
+        parent = os.path.join(root, TEMP_DIR_NAME)
+        try:
+            names = os.listdir(parent)
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(parent, name)
             try:
-                names = os.listdir(parent)
+                if name.startswith("job_") and os.path.isdir(path) \
+                        and os.path.getmtime(path) < limit:
+                    shutil.rmtree(path, ignore_errors=True)
             except OSError:
-                continue
-            for name in names:
-                path = os.path.join(parent, name)
-                try:
-                    if name.startswith("job_") and os.path.isdir(path) \
-                            and (old or os.path.getmtime(path) < limit):
-                        shutil.rmtree(path, ignore_errors=True)
-                except OSError:
-                    pass
-            if old:  # a régi nevű mappa, ha kiürült, el is tűnik
-                try:
-                    os.rmdir(parent)
-                except OSError:
-                    pass
+                pass
 
 
 def find_output_file(folder, basename, ext):
-    """A kész fájl útvonala. Ha a várt név nincs meg, a legfrissebb hozzá tartozó fájl."""
+    """Path of the finished file. If the expected name is missing, the newest file belonging to
+    it."""
     path = os.path.join(folder, basename + ext)
     if os.path.exists(path):
         return path
     try:
         names = [n for n in os.listdir(folder)
-                 if n.startswith(basename + ".") and not is_partial_file(n, basename)]
+                 if n.startswith(basename + ".") and not is_partial_file(n, basename)
+                 and not n.lower().endswith(SUB_EXTS + SIDE_EXTS)]
         names.sort(key=lambda n: os.path.getmtime(os.path.join(folder, n)), reverse=True)
     except OSError:
         return path
@@ -2858,7 +3103,7 @@ def find_output_file(folder, basename, ext):
 
 
 def add_context_menu(widget):
-    """Jobb klikkes (Macen kétujjas kattintás) menü a beviteli mezőkhöz."""
+    """Right-click (two-finger click on macOS) menu for entry fields."""
     menu = tk.Menu(widget, tearoff=0)
     menu.add_command(label=t("Kivágás"), command=lambda: widget.event_generate("<<Cut>>"))
     menu.add_command(label=t("Másolás"), command=lambda: widget.event_generate("<<Copy>>"))
@@ -2879,7 +3124,7 @@ def add_context_menu(widget):
         widget.bind(seq, popup)
 
 
-# ---------- saját, lekerekített elemek ----------
+# ---------- Custom rounded widgets ----------
 class RoundButton(tk.Canvas):
     def __init__(self, parent, text, command, width=None, height=42,
                  bg="ACCENT", fg="ACCENT_FG", hover="ACCENT_HOVER", outline="",
@@ -2888,7 +3133,7 @@ class RoundButton(tk.Canvas):
             parent_bg = parent.cget("bg")
         except Exception:
             parent_bg = BG
-        if width:  # hosszabb (például német) feliratnál a gomb szélesebb lesz, nem vágódik le
+        if width:  # longer (e.g. German) labels make the button wider instead of being cut off
             try:
                 width = max(width, tkfont.Font(root=parent, font=font).measure(text) + 26)
             except Exception:
@@ -2924,7 +3169,7 @@ class RoundButton(tk.Canvas):
         round_rect(self, 1, 1, w - 1, h - 1, RADIUS, fill=fill,
                    outline=col(self._outline) if self._outline else fill)
         text = self._text
-        if len(text) * 5 > w - 16:  # lehet, hogy nem fér ki: mérés, és rövidítés ha kell
+        if len(text) * 5 > w - 16:  # may not fit: measure and shorten if needed
             try:
                 fnt = tkfont.Font(root=self, font=self._font)
                 limit = w - 16
@@ -2943,7 +3188,7 @@ class RoundButton(tk.Canvas):
             self._draw()
 
     def set_colors(self, bg, fg, hover, outline=""):
-        """Szerepnevekkel (ACCENT, CONTROL...), így a témaváltás is követi."""
+        """Colours as role names (ACCENT, CONTROL...), so theme switching follows them."""
         self._bg, self._fg, self._hover, self._outline = bg, fg, hover, outline
         self._draw()
 
@@ -2968,7 +3213,7 @@ class RoundButton(tk.Canvas):
 
 
 class RoundBox(tk.Canvas):
-    """Lekerekített hátterű doboz egy beviteli mezőnek vagy legördülő listának."""
+    """Rounded background box for an entry field or a combobox."""
 
     CLEAR_SIZE = 22
 
@@ -2976,7 +3221,7 @@ class RoundBox(tk.Canvas):
         super().__init__(parent, height=height, width=10, bg=BG,
                          highlightthickness=0, bd=0)
         self._pad = pad
-        self._right = pad  # a jobb oldalon ennyi hely marad a mező után
+        self._right = pad  # space left on the right after the field
         self._outline = "BORDER"
         self._clear_btn = None
         self.widget = make_widget(self)
@@ -2989,7 +3234,7 @@ class RoundBox(tk.Canvas):
         self.widget.bind("<FocusOut>", lambda e: self._set_outline("BORDER"), add="+")
 
     def _build_clear(self, command):
-        """Kis X a mező jobb szélén, kattintásra meghívja a megadott parancsot."""
+        """Small x at the right edge of the field; clicking it runs the given command."""
         s = self.CLEAR_SIZE
         btn = tk.Canvas(self, width=s, height=s, bg=PANEL, highlightthickness=0,
                         bd=0, cursor="hand2")
@@ -3028,7 +3273,7 @@ class RoundBox(tk.Canvas):
         if w < 4:
             return
         self.delete("bg")
-        if self._outline == "ACCENT":  # fókuszban: kék keret és körülötte halvány fény
+        if self._outline == "ACCENT":  # focused: blue outline with a soft glow
             glow = blend_hex(col("ACCENT"), col("BG"), 0.35)
             round_rect(self, 0, 0, w, h, RADIUS + 2, fill=glow, outline=glow, tags="bg")
             round_rect(self, 2, 2, w - 2, h - 2, RADIUS, fill=col("PANEL"),
@@ -3043,7 +3288,7 @@ class RoundBox(tk.Canvas):
 
 
 class BrandMark(tk.Canvas):
-    """Az app felirata: "Vid" a téma kiemelő színével, utána "-Ripper"."""
+    """The app wordmark: "Vid" in the theme accent, then "-Ripper"."""
 
     def __init__(self, parent, style="VD", size=15):
         super().__init__(parent, height=10, width=10, bg=col("SIDEBAR"),
@@ -3069,12 +3314,20 @@ class BrandMark(tk.Canvas):
         h = self._font.metrics("linespace") + 12
         x = self._text(2, "Vid", h, col("ACCENT"))
         x = self._text(x, "-Ripper", h, col("TEXT"))
+        if IS_DEV:  # the dev build is clearly different
+            f = get_font(9, "bold")
+            w = f.measure("DEV") + 10
+            x += 6
+            round_rect(self, x, h / 2 - 9, x + w, h / 2 + 9, 6, fill=col("ACCENT"),
+                       outline=col("ACCENT"))
+            self.create_text(x + w / 2, h / 2, text="DEV", fill=col("ACCENT_FG"), font=f)
+            x += w
         self.configure(width=int(x + 4), height=int(h))
 
 
 class InfoIcon(tk.Canvas):
-    """Karikás "i" ikon: fölé víve a kurzort fél másodperc múlva lebegő ablakban
-    megjelenik a magyarázat. Így a kártyák rövidek maradnak."""
+    """Circled "i" icon: hovering shows the explanation in a floating window after half a
+    second, so the cards stay short."""
 
     DELAY = 500
     SIZE = 18
@@ -3158,8 +3411,9 @@ TOAST_ANIMS = {"fade": t("Áttűnés"), "slide": t("Beúszás"), "none": t("Ninc
 
 
 class Toast(tk.Canvas):
-    """Egy értesítés a jobb alsó sarokban: bélyegkép (vagy ikon), felső sor, cím, alcím, x.
-    Az áttűnéshez minden szín a háttér és a végső szín keveréke (a Tk-ban nincs átlátszóság)."""
+    """A notification in the bottom right corner: thumbnail (or icon), header, title, subtitle,
+    x. For fading every colour is a mix of the background and the final colour (Tk has no
+    transparency)."""
 
     WIDTH = 360
     THUMB = (96, 54)
@@ -3171,7 +3425,7 @@ class Toast(tk.Canvas):
         self.stack, self.title, self.message, self.kind = stack, title, message, kind
         self.header, self.action = header, action
         self.alpha = 1.0
-        self.dx = 0          # beúszásnál a vízszintes eltolás
+        self.dx = 0  # horizontal offset when sliding in
         self.leaving = False
         self._anim_job = None
         self._thumb_img = self._prepare_thumb(thumb)
@@ -3198,7 +3452,7 @@ class Toast(tk.Canvas):
     def _click(self, event):
         if self.leaving:
             return
-        if event.x > self.WIDTH - 30 and event.y < 30:  # a bezáró x
+        if event.x > self.WIDTH - 30 and event.y < 30:  # the close x
             self.stack.remove(self)
             return
         if self.action:
@@ -3210,7 +3464,7 @@ class Toast(tk.Canvas):
         self._draw()
 
     def _c(self, role):
-        """Szín az áttűnés adott pontján (háttérből a végső színbe)."""
+        """Colour at a given point of the fade (from the background to the final colour)."""
         target = role if role.startswith("#") else col(role)
         return target if self.alpha >= 1 else _mix(col("BG"), target, max(0.0, self.alpha))
 
@@ -3239,7 +3493,7 @@ class Toast(tk.Canvas):
             base.paste(img, (0, 0), mask)
             self._photo = ImageTk.PhotoImage(base)
             self.create_image(14, h / 2, image=self._photo, anchor="w")
-            if self.kind == "error":  # kis piros jelzés a kép sarkán
+            if self.kind == "error":  # small red badge on the corner of the image
                 self.create_oval(14 + self.THUMB[0] - 18, h / 2 - self.THUMB[1] / 2 + 4,
                                  14 + self.THUMB[0] - 4, h / 2 - self.THUMB[1] / 2 + 18,
                                  fill=self._c(accent), outline=self._c(accent))
@@ -3280,13 +3534,13 @@ class Toast(tk.Canvas):
 
 
 class ToastStack:
-    """Az értesítések a tartalom jobb alsó sarkában, egymás fölé rendezve.
-    Néhány másodperc múlva maguktól eltűnnek; amíg az egér rajtuk van, nem.
-    Megjelenés és eltűnés: áttűnés, oldalról beúszás vagy animáció nélkül (anim)."""
+    """Notifications stacked in the bottom right corner of the content. They disappear after a
+    few seconds, but not while the mouse is over them. Show/hide animation: fade, slide in or
+    none (anim)."""
 
     LIFETIME = 6000
     MAX = 4
-    ANIM_MS = 260  # közepesen gyors
+    ANIM_MS = 260  # medium speed
 
     def __init__(self, host, anim="fade"):
         self.host = host
@@ -3315,7 +3569,7 @@ class ToastStack:
     def _expire(self, toast):
         if toast not in self.items or toast.leaving:
             return
-        if self._paused:  # az egér rajta van: várunk még
+        if self._paused:  # the mouse is over it: wait a bit more
             self.host.after(1000, lambda: self._expire(toast))
             return
         self.remove(toast)
@@ -3348,7 +3602,7 @@ class ToastStack:
         def step():
             toast._anim_job = None
             t = min(1.0, (time.time() - t0) * 1000 / self.ANIM_MS)
-            e = 1 - (1 - t) ** 3 if entering else t ** 2  # érkezéskor lassul, távozáskor gyorsul
+            e = 1 - (1 - t) ** 3 if entering else t ** 2  # decelerates when arriving, accelerates when leaving
             try:
                 if self.anim == "fade":
                     toast.alpha = start_alpha + ((1.0 if entering else 0.0) - start_alpha) * e
@@ -3375,20 +3629,20 @@ class ToastStack:
 
     def _layout(self):
         y = -18
-        for toast in reversed(self.items):  # a legújabb legalul
+        for toast in reversed(self.items):  # newest at the bottom
             try:
                 toast.update_idletasks()
                 toast._y = y
                 self._place(toast)
-                toast.tk.call("raise", toast._w)  # a vászon lift() mást jelent
+                toast.tk.call("raise", toast._w)  # lift() means something else on a canvas
                 y -= int(toast["height"]) + 10
             except tk.TclError:
                 pass
 
 
 class CommandMenu:
-    """Cmd/Ctrl+K keresőmenü: oldalak, témák, műveletek és az előzmények egy helyen,
-    billentyűzettel (fel, le, Enter, Esc) vagy egérrel."""
+    """Cmd/Ctrl+K command menu: pages, themes, actions and history in one place, by keyboard
+    (up, down, Enter, Esc) or mouse."""
 
     MAX_ROWS = 9
 
@@ -3405,7 +3659,7 @@ class CommandMenu:
 
     def open(self):
         root = self.app.root
-        card = RoundCard(self.app.content)  # a tartalom fölé, nem takarja a bal sávot
+        card = RoundCard(self.app.content)  # over the content, without covering the sidebar
         card.inner.configure(padx=12, pady=12)
         card.inner.columnconfigure(0, weight=1)
         self.frame = card
@@ -3470,7 +3724,7 @@ class CommandMenu:
         app = self.app
         cmds = [
             (t("Videó kiválasztása"), t("Letöltő"), lambda: app._switch_tab("0")),
-            (t("Előzmények"), t("Oldal"), lambda: app._switch_tab("2")),
+            (t("Könyvtár"), t("Oldal"), lambda: app._switch_tab("2")),
             (t("Beállítások"), t("Oldal"), lambda: app._switch_tab("3")),
             (t("Link beillesztése a vágólapról"), t("Művelet"),
              lambda: (app._switch_tab("0"), app._paste_url())),
@@ -3480,12 +3734,13 @@ class CommandMenu:
             cmds.append((t('Téma: {label}').format(label=label), t("Téma"), lambda k=key: app.set_theme_style(k)))
         cmds.append((t("Megjelenés: Sötét"), t("Téma"), lambda: app.set_theme_mode("dark")))
         cmds.append((t("Megjelenés: Világos"), t("Téma"), lambda: app.set_theme_mode("light")))
+        cmds.append((t("Megjelenés: Rendszer"), t("Téma"), lambda: app.set_theme_mode("system")))
         return cmds
 
     def _fill(self):
         q = _fold(self.query.get().strip())
         items = [c for c in self.commands() if not q or q in _fold(c[0])]
-        if q and not self.app.hist_locked:  # az előzményekben is keres
+        if q and not self.app.hist_locked:  # searches the history too
             for i, entry in enumerate(self.app.history):
                 if history_matches(entry, self.query.get().strip()):
                     items.append((history_label(entry), t("Előzmény"),
@@ -3527,7 +3782,7 @@ class CommandMenu:
 
 
 class NavItem(tk.Canvas):
-    """Egy sor a bal oldali sávban: ikon, név és jobbra egy kis szám (pl. "2 fut")."""
+    """A row in the sidebar: icon, name and a small number on the right (e.g. "2 running")."""
 
     HEIGHT = 38
 
@@ -3559,7 +3814,7 @@ class NavItem(tk.Canvas):
             self._draw()
 
     def set_activity(self, n):
-        """Futó letöltések: jobbra egy le-fel mozgó nyíl és a darabszám (0: eltűnik)."""
+        """Running downloads: a bobbing arrow and the count on the right (0 hides it)."""
         if n == getattr(self, "activity", 0):
             return
         self.activity = n
@@ -3598,7 +3853,7 @@ class NavItem(tk.Canvas):
         self.create_text(40, h / 2, text=self.text, anchor="w", fill=col("TEXT"),
                          font=get_font(13, "bold" if self.selected else "normal"))
         if getattr(self, "activity", 0):
-            # a nyíl lassan le-fel mozog (1,2 mp-es ciklus), mellette a futók száma
+            # the arrow bobs slowly (1.2 s cycle), next to it the number of running downloads
             phase = ((time.time() - getattr(self, "_bob_t0", 0)) % 1.2) / 1.2
             dy = 2.5 * math.sin(phase * 2 * math.pi)
             color = col("ACCENT") if not self.selected else accent
@@ -3613,7 +3868,7 @@ class NavItem(tk.Canvas):
 
 
 def make_check(parent, text, variable, command=None, size=12):
-    """Pipa az app színeivel (a beállításokban, a letöltő oldalon és a listában ugyanígy)."""
+    """Checkbox in the app colours (same in settings, downloader and lists)."""
     try:
         bg = parent.cget("bg")
     except tk.TclError:
@@ -3629,7 +3884,8 @@ def on_off_options():
 
 
 def labeled_control(parent, row, text, options, value, command, width):
-    """Egy sor: balra a felirat, jobbra a kapcsoló (például Ki / Be). (sor, kapcsoló)"""
+    """A row with the label on the left and a control on the right (e.g. Off / On). Returns
+    (row, control)."""
     line = tk.Frame(parent, bg=PANEL)
     line.grid(row=row, column=0, sticky="ew", pady=(8, 0))
     line.columnconfigure(0, weight=1)
@@ -3641,27 +3897,27 @@ def labeled_control(parent, row, text, options, value, command, width):
 
 
 def secondary_button(parent, text, command, width=100, height=42, fg="TEXT", **kw):
-    """Szürke, másodlagos gomb (a fő, kék gomb mellett: Mégse, Tallózás, Törlés stb.)."""
+    """Grey secondary button (next to the main accent button: Cancel, Browse, Delete etc.)."""
     return RoundButton(parent, text, command, width=width, height=height, bg="CONTROL",
                        fg=fg, hover="CONTROL_HOVER", outline="BORDER", **kw)
 
 
 class SegmentedControl(tk.Canvas):
-    """Apple stílusú kapcsoló: egymás mellett lévő lehetőségek, az egyik ki van választva."""
+    """Apple-style segmented control: options side by side, one of them selected."""
 
     def __init__(self, parent, options, value, command, width=300, height=32):
         try:
             parent_bg = parent.cget("bg")
         except Exception:
             parent_bg = BG
-        try:  # minden felirat elférjen (a német szövegek hosszabbak)
+        try:  # every label must fit (German texts are longer)
             fnt = get_font(13, "bold")
             width = max(width, sum(fnt.measure(lbl) + 28 for _, lbl in options) + 4)
         except Exception:
             pass
         super().__init__(parent, width=width, height=height, bg=parent_bg,
                          highlightthickness=0, bd=0, cursor="hand2")
-        self.options = list(options)  # [(érték, felirat), ...]
+        self.options = list(options)  # [(value, label), ...]
         self.value = value
         self._command = command
         self._pulse_i = None
@@ -3690,8 +3946,8 @@ class SegmentedControl(tk.Canvas):
         self._draw()
 
     def _bounds(self, w):
-        """Az egyes elemek (bal, jobb) széle. Alapból egyforma szélesek; ha egy felirat
-        (például "Aktív letöltések (1)") nem fér el, az kap több helyet."""
+        """Left and right edges of the segments. Equal widths by default; a label that does not
+        fit (e.g. "Active downloads (1)") gets more room."""
         n = len(self.options)
         total = w - 4
         equal = total / n
@@ -3761,14 +4017,14 @@ class RoundProgress(tk.Canvas):
             parent_bg = BG
         super().__init__(parent, height=height, width=10, bg=parent_bg,
                          highlightthickness=0, bd=0)
-        self._value = 0   # a cél
-        self._shown = 0   # ami éppen látszik (ez közelít a célhoz)
+        self._value = 0  # the target
+        self._shown = 0  # what is shown now (approaches the target)
         self._job = None
         self.bind("<Configure>", lambda e: self._draw())
 
     def set(self, value):
         value = max(0, min(100, value))
-        if value < self._value or value == 0:  # visszaállítás: nem animáljuk
+        if value < self._value or value == 0:  # going back: no animation
             self._shown = value
         self._value = value
         self._tick()
@@ -3787,7 +4043,7 @@ class RoundProgress(tk.Canvas):
         self._draw()
 
     def set_live(self, on):
-        """Élő felvétel: piros, mozgó csíkos sáv (nincs ismert vége)."""
+        """Live recording: a red bar with moving stripes (no known end)."""
         on = bool(on)
         if on == getattr(self, "_live", False):
             return
@@ -3818,7 +4074,7 @@ class RoundProgress(tk.Canvas):
             base = col("DANGER")
             light = blend_hex("#ffffff", base, 0.35)
             round_rect(self, 0, 0, w, h, h / 2, fill=base, outline=base)
-            r = h / 2  # a lekerekített végeken nem rajzolunk csíkot
+            r = h / 2  # no stripes on the rounded ends
             for x in range(-18 + self._offset, w + 18, 18):
                 if x >= r and x + 12 <= w - r:
                     self.create_polygon(x, h, x + 6, 0, x + 12, 0, x + 6, h,
@@ -3834,7 +4090,7 @@ class RoundProgress(tk.Canvas):
 
 
 class EmptyState(tk.Canvas):
-    """Üres lista helyett: kerek ikon, cím és rövid magyarázat középen."""
+    """Instead of an empty list: round icon, title and a short hint in the centre."""
 
     def __init__(self, parent, kind, title, hint, height=210):
         try:
@@ -3878,7 +4134,7 @@ class EmptyState(tk.Canvas):
 
 
 class RoundCard(tk.Canvas):
-    """Lekerekített kártya, amibe elemeket lehet tenni (a .inner keretbe)."""
+    """Rounded card that holds widgets (in its .inner frame)."""
 
     def __init__(self, parent):
         try:
@@ -3894,7 +4150,7 @@ class RoundCard(tk.Canvas):
         self.inner.bind("<Configure>", self._on_inner)
 
     def set_outline(self, role):
-        """A keret színe szerepnévvel (BORDER, ACCENT, OK = a kész zöldje, DANGER)."""
+        """Outline colour as a role name (BORDER, ACCENT, OK = the done green, DANGER)."""
         if role != self.outline_role:
             self.outline_role = role
             self._draw()
@@ -3907,7 +4163,7 @@ class RoundCard(tk.Canvas):
         self.configure(height=self.inner.winfo_reqheight() + 4)
 
     def sync_height(self):
-        """A kártya magassága a tartalma szerint akkor is, ha épp nem látszik."""
+        """Card height from its content, even while it is not visible."""
         h = self.inner.winfo_reqheight() + 4
         if self.winfo_reqheight() != h:
             self.configure(height=h)
@@ -3928,7 +4184,7 @@ class RoundCard(tk.Canvas):
 
 
 class PreviewCard(tk.Canvas):
-    """Kártya a videó bélyegképével, címével és adataival. Megjelenéskor előtűnik."""
+    """Card with the video thumbnail, title and details. Fades in when shown."""
 
     STEPS = 9
 
@@ -3965,7 +4221,7 @@ class PreviewCard(tk.Canvas):
     def _advance(self, i):
         self._job = None
         t = i / self.STEPS
-        self._a = 1 - (1 - t) ** 2  # lassulva érkezik
+        self._a = 1 - (1 - t) ** 2  # decelerates on arrival
         self._draw()
         if i < self.STEPS:
             try:
@@ -3978,7 +4234,7 @@ class PreviewCard(tk.Canvas):
         self._draw()
 
     def thumb_geometry(self):
-        """A bélyegkép helye a képernyőn (x, y, szélesség, magasság), vagy None."""
+        """Screen position of the thumbnail (x, y, width, height), or None."""
         try:
             if self._photo is None or self._pil is None or not self.winfo_ismapped():
                 return None
@@ -4022,7 +4278,7 @@ class PreviewCard(tk.Canvas):
         title = self._title if len(self._title) <= 90 else self._title[:89] + "…"
         item = self.create_text(x, 0, text=title, fill=self._fade("TEXT"), anchor="nw",
                                 width=wrap, font=(FONT_FAMILY, 13, "bold"), tags="txt")
-        y = (self.bbox(item) or (0, 0, 0, 0))[3] + 6  # üres cím: nincs szövegdoboz
+        y = (self.bbox(item) or (0, 0, 0, 0))[3] + 6  # empty title: no text box
 
         measure = get_font(12).measure
         for label, value in self._details:
@@ -4035,23 +4291,23 @@ class PreviewCard(tk.Canvas):
                                    font=(FONT_FAMILY, 12), tags="txt")
             y = (self.bbox(val) or (0, y, 0, y))[3] + 3
 
-        # a szöveg függőleges középre igazítása
+        # vertically centre the text
         box = self.bbox("txt")
         if box:
             self.move("txt", 0, (h - (box[3] - box[1])) / 2 - box[1])
-        if self._a < 1:  # közben kicsit lentről csúszik a helyére
+        if self._a < 1:  # slides up into place meanwhile
             self.move("all", 0, (1 - self._a) * 10)
 
 
-RESIZE_SETTLE_MS = 120  # átméretezéskor ennyi szünet után igazodik a tartalom szélessége
+RESIZE_SETTLE_MS = 120  # on resize the content width follows after this pause
 
 
 class CanvasStack:
-    """Görgethető oszlop, amelyben minden elem (kártya, csoportcím) külön ablak-elem a vásznon.
-    A Tk a látható részen kívül eső ablak-elemeket leveszi a képernyőről, így átméretezéskor
-    és görgetéskor csak a látszó néhány kártyát kell kirajzolni, nem mind a százat. Macen egy
-    keretben tartott sok kártya miatt egy átméretezési lépés másodpercekig is tartott.
-    A szélesség húzásos átméretezés közben nem követi az ablakot, csak amikor megáll a húzás."""
+    """Scrollable column where every item (card, group title) is a separate canvas window item.
+    Tk unmaps window items outside the visible area, so resizing and scrolling only redraw
+    the few visible cards, not all hundred. On macOS keeping many cards in one frame made a
+    single resize step take seconds. The width does not follow the window during a drag
+    resize, only when the drag stops."""
 
     def __init__(self, canvas, right_gap=22, end_pad=0):
         self.canvas = canvas
@@ -4065,16 +4321,20 @@ class CanvasStack:
         self._canvas_width = None
         canvas.bind("<Configure>", self._on_canvas_configure)
 
-    # --- elemek ---
+    # --- items ---
     def width(self):
         try:
             return max(self.canvas.winfo_width() - self.gap, 100)
         except tk.TclError:
             return 100
 
-    def add(self, widget, top=0, bottom=0, padx=0, keep=False, footer=False):
-        """Új elem az oszlop végére (a lábléc elé). `keep`: az ürítés nem törli."""
-        item = self.canvas.create_window(padx, self.total, window=widget, anchor="nw",
+    def add(self, widget, top=0, bottom=0, padx=0, keep=False, footer=False, before=None):
+        """Adds an item at the end of the column (before the footer), or before the `before`
+        widget. `keep`: not removed by clear()."""
+        # created off screen and moved into place by relayout: many items stacked in the same
+        # visible spot make Tk clip them against each other, which slows down quadratically with
+        # the number of cards (100 cards: 0.55 s instead of 3.8 s)
+        item = self.canvas.create_window(padx, OFFSCREEN_Y, window=widget, anchor="nw",
                                          width=max(10, self.width() - 2 * padx))
         rec = {"w": widget, "id": item, "top": top, "bottom": bottom, "padx": padx,
                "keep": keep or footer, "footer": footer, "y": None, "h": None}
@@ -4082,13 +4342,15 @@ class CanvasStack:
         if not footer:
             while pos and self.items[pos - 1]["footer"]:
                 pos -= 1
+        if before is not None:
+            pos = next((k for k, r in enumerate(self.items) if r["w"] is before), pos)
         self.items.insert(pos, rec)
         widget.bind("<Configure>", self._on_item_configure, add="+")
         self.relayout_soon()
         return widget
 
     def clear(self):
-        """A nem megtartott elemek törlése (pl. a kártyák újraépítése előtt)."""
+        """Removes the items not marked keep (e.g. before rebuilding the cards)."""
         for rec in [r for r in self.items if not r["keep"]]:
             try:
                 self.canvas.delete(rec["id"])
@@ -4099,7 +4361,7 @@ class CanvasStack:
         self.relayout_soon()
 
     def bounds(self, widget):
-        """(teteje, magassága) a vásznon, a widget vagy valamelyik szülője alapján."""
+        """(top, height) on the canvas, found from the widget or one of its parents."""
         self.relayout()
         w = widget
         while w is not None:
@@ -4109,7 +4371,7 @@ class CanvasStack:
             w = getattr(w, "master", None)
         return None
 
-    # --- elrendezés ---
+    # --- layout ---
     @staticmethod
     def _height(widget):
         sync = getattr(widget, "sync_height", None)
@@ -4117,8 +4379,8 @@ class CanvasStack:
             return sync()
         if widget.winfo_class() == "Frame" and not (
                 widget.grid_slaves() or widget.pack_slaves() or widget.place_slaves()):
-            # a Tk az üressé vált keret régi méretét megtartja (pl. ha a FOLYAMATBAN rész
-            # eltűnt): ilyenkor kézzel zsugorítjuk, különben nagy üres hely marad
+            # Tk keeps the old size of a frame that became empty (e.g. when the IN PROGRESS section
+            # disappears), so it is shrunk by hand, otherwise a big gap remains
             if widget.winfo_reqheight() > 1:
                 widget.configure(height=1)
             return 1
@@ -4143,7 +4405,7 @@ class CanvasStack:
             view_top = c.canvasy(0)
         except tk.TclError:
             return
-        # az első látszó elem a helyén marad, ha fölötte valami megnőtt vagy összement
+        # the first visible item stays in place when something above it grows or shrinks
         anchor = next((r for r in self.items if r["y"] is not None
                        and r["y"] + r["h"] > view_top), None)
         old_anchor_y = anchor["y"] if anchor else None
@@ -4168,7 +4430,7 @@ class CanvasStack:
             if shift:
                 new_top = max(0, view_top + shift)
                 c.yview_moveto(new_top / max(1, self.total))
-                if getattr(c, "_sc_job", None) is not None:  # épp görgetés-animáció fut
+                if getattr(c, "_sc_job", None) is not None:  # a scroll animation is running
                     c._sc_pos = getattr(c, "_sc_pos", view_top) + shift
                     c._sc_target = getattr(c, "_sc_target", view_top) + shift
 
@@ -4179,7 +4441,7 @@ class CanvasStack:
                     self.relayout_soon()
                 return
 
-    # --- szélesség ---
+    # --- width ---
     def _apply_width(self):
         self._width_job = None
         w = self.width()
@@ -4203,10 +4465,13 @@ class CanvasStack:
             self._width_job = self.canvas.after(RESIZE_SETTLE_MS, self._apply_width)
 
 
+OFFSCREEN_Y = -100_000  # new items are placed here until relayout puts them in place
+
+
 def track_scroll_body(canvas, body):
-    """A görgetési terület mérete csak akkor frissül, ha a tartalom tényleg átméreteződött.
-    A görgetés maga is <Configure>-t küld (elmozdul a keret), ilyenkor nincs teendő:
-    enélkül minden görgetési lépés egy teljes újrarajzolást is kért, ez akadozott Macen."""
+    """Updates the scroll region only when the content really resized. Scrolling itself sends
+    <Configure> (the frame moves) and needs nothing; without this check every scroll step
+    requested a full redraw, which stuttered on macOS."""
     last = [None]
 
     def on_configure(event):
@@ -4218,8 +4483,8 @@ def track_scroll_body(canvas, body):
 
 
 def auto_scrollbar(bar, lo, hi, **grid):
-    """A görgetősáv csak akkor látszik, ha nem fér el minden. Csak váltáskor nyúlunk az
-    elrendezéshez, mert a grid() minden hívása újraszámolja az oldalt."""
+    """Shows the scrollbar only when not everything fits. Only touches the layout when the state
+    changes, because every grid() call relayouts the page."""
     bar.set(lo, hi)
     need = not (float(lo) <= 0.0 and float(hi) >= 1.0)
     if getattr(bar, "_shown", None) is need:
@@ -4232,8 +4497,8 @@ def auto_scrollbar(bar, lo, hi, **grid):
 
 
 def bring_to_front(win):
-    """Az ablak előre kerül és megkapja a fókuszt. Kicsit később is, mert Macen a kattintás
-    befejezése után a főablak még visszaveheti az elsőbbséget."""
+    """Raises the window and gives it focus, also a little later, because on macOS the main
+    window may take precedence again after the click ends."""
     def front():
         try:
             if win.winfo_exists():
@@ -4247,7 +4512,7 @@ def bring_to_front(win):
 
 
 def center_over(win, parent, min_y=0):
-    """A párbeszédablakot a szülő ablak közepére teszi (a méretét a tartalom adja)."""
+    """Centres the dialog over its parent window (its size comes from the content)."""
     parent.update_idletasks()
     win.update_idletasks()
     w, h = win.winfo_reqwidth(), win.winfo_reqheight()
@@ -4257,7 +4522,7 @@ def center_over(win, parent, min_y=0):
 
 
 class Dialog(tk.Toplevel):
-    """Saját felugró ablak, ami az app ablakának közepén jelenik meg."""
+    """Custom message dialog centred over the app window."""
 
     HEADINGS = {"info": t("Letöltés kész"), "warning": t("Figyelem"), "error": t("Hiba")}
 
@@ -4290,7 +4555,7 @@ class Dialog(tk.Toplevel):
 
 
 class ConfirmDialog(tk.Toplevel):
-    """Igen/Nem jellegű kérdés, az app ablakának közepén. Az eredmény a result mezőben."""
+    """Yes/No question centred over the app window. The answer is in result."""
 
     def __init__(self, parent, heading, message, yes_text, no_text, danger):
         super().__init__(parent)
@@ -4333,10 +4598,13 @@ class ConfirmDialog(tk.Toplevel):
 
 
 class PlaylistDialog(tk.Toplevel):
-    """Lejátszási lista: itt lehet kipipálni, melyik videókat töltsük le. Eredmény a result mezőben:
-    (kiválasztott elemek, felbontás felirata) vagy None."""
+    """Playlist picker: tick the videos to download. The result is (chosen items, resolution
+    label, extras) or None."""
 
-    def __init__(self, parent, title, entries, capped, res_values, default_res):
+    SUB_PREFS = (("none", NO_SUB_LABEL), ("orig", t("Eredeti nyelv")), ("hu", t("Magyar")),
+                 ("en", t("Angol")))
+
+    def __init__(self, parent, title, entries, capped, res_values, default_res, sb_label=None):
         super().__init__(parent)
         self.withdraw()
         self.title(APP_NAME)
@@ -4395,6 +4663,20 @@ class PlaylistDialog(tk.Toplevel):
         self.res_box.pack(side="right")
         tk.Label(tools, text=t("Minőség"), bg=BG, fg=GREY, font=small).pack(side="right", padx=(0, 8))
 
+        # subtitles (per video, if available) and SponsorBlock (only if the list has YouTube
+        # videos)
+        extras = tk.Frame(body, bg=BG)
+        extras.pack(fill="x", pady=(10, 0))
+        self.sub_pref = tk.StringVar(value=NO_SUB_LABEL)
+        ttk.Combobox(extras, textvariable=self.sub_pref, state="readonly", style="Chip.TCombobox",
+                     values=[label for _, label in self.SUB_PREFS], width=14,
+                     font=(FONT_FAMILY, 13)).pack(side="right")
+        tk.Label(extras, text=t("Felirat (ha van)"), bg=BG, fg=GREY, font=small).pack(
+            side="right", padx=(0, 8))
+        self.sb = tk.BooleanVar(value=False)
+        if sb_label and any(is_youtube_url(e.get("url")) for e in entries):
+            make_check(extras, "SponsorBlock: " + sb_label, self.sb, size=12).pack(side="left")
+
         row = tk.Frame(body, bg=BG)
         row.pack(fill="x", pady=(16, 0))
         self.count = tk.Label(row, text="", bg=BG, fg=GREY, font=small)
@@ -4433,7 +4715,8 @@ class PlaylistDialog(tk.Toplevel):
         chosen = self._chosen()
         if not chosen:
             return
-        self.result = (chosen, self.res.get())
+        pref = next((k for k, label in self.SUB_PREFS if label == self.sub_pref.get()), "none")
+        self.result = (chosen, self.res.get(), {"sub": pref, "sponsorblock": self.sb.get()})
         self.destroy()
 
     def _cancel(self):
@@ -4442,9 +4725,9 @@ class PlaylistDialog(tk.Toplevel):
 
 
 class PasswordDialog(tk.Toplevel):
-    """Jelszó bekérő ablak egy vagy több mezővel. Az eredmény a result mezőben:
-    a beírt értékek listája, vagy None, ha mégsem. A validate(értékek) hibaszöveget ad
-    vissza (és az ablak nyitva marad), vagy None-t, ha rendben van."""
+    """Password dialog with one or more fields. The result is the list of entered values, or
+    None if cancelled. validate(values) returns an error text (the dialog stays open) or None
+    if valid."""
 
     def __init__(self, parent, heading, message, labels, ok_text, validate=None, danger=False):
         super().__init__(parent)
@@ -4509,8 +4792,8 @@ class PasswordDialog(tk.Toplevel):
 
 
 class AboutDialog(tk.Toplevel):
-    """A Névjegy ablak: Macen az alkalmazásmenü "About Vid-Ripper" pontjából nyílik.
-    Sima, külön ablak (nem tartozik a főablakhoz), hogy mozgatás közben ne akadozzon."""
+    """The About window; on macOS it opens from the app menu's "About Vid-Ripper". A plain
+    separate window (not transient), so moving it does not stutter."""
 
     def __init__(self, parent, app, icon):
         super().__init__(parent)
@@ -4518,7 +4801,7 @@ class AboutDialog(tk.Toplevel):
         self.app = app
         self.title(t("{app} névjegye").format(app=APP_NAME))
         self.configure(bg=BG)
-        self._icon = icon  # a képet tartani kell, különben eltűnik
+        self._icon = icon  # keep a reference to the image, otherwise it disappears
 
         body = tk.Frame(self, bg=BG, padx=34, pady=24)
         body.pack()
@@ -4568,7 +4851,7 @@ class AboutDialog(tk.Toplevel):
         txt.configure(state="disabled")
 
 class ChangelogDialog(tk.Toplevel):
-    """Újdonságok: a verziók közti változások, a legfrissebbtől visszafelé."""
+    """What's new: changes between versions, newest first."""
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -4613,14 +4896,13 @@ class ChangelogDialog(tk.Toplevel):
 
 
 def open_default(path):
-    """A fájl megnyitása az operációs rendszer alapértelmezett programjával.
-    Visszaadja, hogy sikerült-e elindítani."""
+    """Opens the file with the OS default application. Returns whether it could be started."""
     try:
         if is_mac():
             subprocess.run(["open", path], timeout=10, check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif is_win():
-            os.startfile(path)  # noqa: F821  (csak Windowson van)
+            os.startfile(path)  # noqa: F821 (Windows only)
         else:
             subprocess.run(["xdg-open", path], timeout=10, check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -4634,15 +4916,16 @@ _PLAYER_NAMES = {}
 
 
 def default_player_name(path):
-    """Az operációs rendszer alapértelmezett lejátszójának neve a fájlhoz (pl. QuickTime Player),
-    vagy None, ha nem derül ki. Kiterjesztésenként gyorsítótárazva."""
+    """Name of the OS default player for the file (e.g. QuickTime Player), or None if it cannot
+    be found. Cached per extension."""
     ext = os.path.splitext(path)[1].lower()
     if ext in _PLAYER_NAMES:
         return _PLAYER_NAMES[ext]
     name = None
     try:
         if is_mac():
-            # a fájl útvonala argumentumként megy (nem a szövegbe), így semmi nem törheti el
+            # the file path is passed as an argument (not inside the script text), so nothing in it
+            # can break the command
             script = ('use framework "Foundation"\nuse framework "AppKit"\n'
                       "on run argv\n"
                       "set u to current application's NSURL's fileURLWithPath:(item 1 of argv)\n"
@@ -4682,8 +4965,8 @@ def default_player_name(path):
 
 
 def usable_geometry(geo, sw, sh, min_w=480, min_h=320):
-    """A mentett ablakhelyzet, ha érvényes és látszik a képernyőn (pl. már nincs meg a második
-    monitor); különben None."""
+    """The saved window geometry if it is valid and visible on screen (e.g. the second monitor
+    may be gone); otherwise None."""
     if not isinstance(geo, str) or not PLAYER_GEO_RE.match(geo):
         return None
     m = re.match(r"^(\d+)x(\d+)([+-]\d+)([+-]\d+)$", geo)
@@ -4696,8 +4979,8 @@ def usable_geometry(geo, sw, sh, min_w=480, min_h=320):
 
 
 def probe_video(path):
-    """Az ffprobe adatai a fájlról: méret, képkockasebesség, hossz, van-e kép és hang.
-    None, ha az ffprobe nincs meg vagy a fájl nem olvasható."""
+    """ffprobe info about the file: size, frame rate, duration, whether it has video and audio.
+    None if ffprobe is missing or the file cannot be read."""
     exe = shutil.which("ffprobe")
     if not exe:
         return None
@@ -4745,7 +5028,7 @@ def probe_video(path):
 
 
 def fmt_speed(v):
-    """0,5x, 1x, 1,25x: magyar tizedesvesszővel."""
+    """0,5x, 1x, 1,25x: with a decimal comma."""
     return (f"{v:g}").replace(".", ",") + "x"
 
 
@@ -4756,23 +5039,23 @@ def fmt_time(sec):
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
-# a lejátszó mindig sötét, a témától függetlenül; a színek szándékosan nincsenek a
-# palettákban, így a témaváltás nem írja át őket
+# the player is always dark regardless of the theme; its colours are deliberately not in the
+# palettes, so theme switching leaves them alone
 PL_VIDEO = "#000001"
 PL_BAR = "#161618"
 PL_BTN = "#262629"
 PL_BTN_HOVER = "#37373b"
 PL_TEXT = "#f2f2f4"
 PL_DIM = "#9a9aa0"
-PL_MIN_PIXELS = 640 * 360  # ennél kisebbre nem csökkentjük a képet, ha a gép lassú
-PL_MAX_PIXELS = 2560 * 1440  # ennél nagyobb képet (4K) kisebben dekódolunk és nagyítunk
+PL_MIN_PIXELS = 640 * 360  # never shrink the picture below this on a slow machine
+PL_MAX_PIXELS = 2560 * 1440  # larger pictures (4K) are decoded smaller and scaled up
 PL_SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
 PL_PIP_WIDTH = 360
-PL_HIDE_MS = 2500  # teljes képernyőn ennyi mozdulatlanság után tűnnek el a vezérlők
+PL_HIDE_MS = 2500  # in full screen the controls hide after this much inactivity
 
 
 class SeekBar(tk.Canvas):
-    """Vékony, Apple stílusú csúszka (keresősáv, később a hangerő is): 0 és 1 közti érték."""
+    """Thin Apple-style slider (seek bar, also used for volume): a value between 0 and 1."""
 
     def __init__(self, parent, on_seek, on_drag=None, height=26):
         super().__init__(parent, height=height, bg=parent.cget("bg"), highlightthickness=0,
@@ -4820,7 +5103,7 @@ class SeekBar(tk.Canvas):
             self._on_seek(self.value)
 
     def set_value(self, v):
-        """Kívülről állítva (lejátszás közben); húzás közben nem írjuk felül."""
+        """Set from outside (during playback); not overwritten while dragging."""
         if self._drag:
             return
         v = max(0.0, min(1.0, v))
@@ -4845,14 +5128,14 @@ class SeekBar(tk.Canvas):
 
 
 class AudioOut:
-    """A hang: az ffmpeg PCM-et ad, a hangkártyára a sounddevice viszi. A lejátszási idő a
-    ténylegesen kiadott hangmintákból számolódik, ez a lejátszó fő órája (a kép ehhez igazodik).
-    A `make_stream` cserélhető, így a hangkártya nélkül is tesztelhető."""
+    """Audio: ffmpeg outputs PCM and sounddevice plays it. The playback time is computed from
+    the samples actually played; this is the player's master clock (video follows it).
+    `make_stream` is replaceable, so it can be tested without a sound card."""
 
     RATE = 44100
     CHANNELS = 2
-    FRAME = 4  # 2 csatorna, 16 bit
-    MAX_BUFFER = RATE * FRAME * 3  # legfeljebb 3 másodpercnyi hang vár a pufferben
+    FRAME = 4  # 2 channels, 16 bit
+    MAX_BUFFER = RATE * FRAME * 3  # at most 3 seconds of audio waiting in the buffer
 
     def __init__(self, path, start, make_stream=None):
         self.path = path
@@ -4862,7 +5145,7 @@ class AudioOut:
         self.speed = 1.0
         self._lock = threading.Lock()
         self._buf = bytearray()
-        self._consumed = 0          # kiadott képkockák (hangminták) száma az indulás óta
+        self._consumed = 0  # frames (samples) played since start
         self._start = 0.0
         self._eof = False
         self._proc = None
@@ -4877,9 +5160,9 @@ class AudioOut:
             samplerate=AudioOut.RATE, channels=AudioOut.CHANNELS, dtype="int16",
             blocksize=1024, callback=callback)
 
-    # ---------- dekódolás ----------
+    # ---------- Decoding ----------
     def restart(self, start):
-        """Új kezdőpont (tekerés): a hang az adott időponttól szól tovább."""
+        """New start position (seek): audio continues from that time."""
         self._kill()
         with self._lock:
             self._buf = bytearray()
@@ -4938,7 +5221,7 @@ class AudioOut:
             except Exception:
                 pass
 
-    # ---------- kimenet ----------
+    # ---------- Output ----------
     def _callback(self, outdata, frames, _time, _status):
         need = frames * self.FRAME
         data = b""
@@ -4956,11 +5239,11 @@ class AudioOut:
                 else:
                     data = array.array("h", [int(x * vol) for x in arr]).tobytes()
         if len(data) < need:
-            data += bytes(need - len(data))  # hiány vagy szünet: csend
+            data += bytes(need - len(data))  # underrun or pause: silence
         outdata[:need] = data
 
     def start_stream(self):
-        """A hangkártya megnyitása (az első lejátszáskor). False, ha nem sikerült."""
+        """Opens the sound card (on first playback). False if it failed."""
         if self._stream is not None:
             return True
         try:
@@ -4982,7 +5265,7 @@ class AudioOut:
             return max(self._start, self._start + (self._consumed / self.RATE - lat) * self.speed)
 
     def finished(self):
-        """A fájl hangja véget ért és a puffer is kiürült."""
+        """The file's audio has ended and the buffer is empty."""
         with self._lock:
             return self._eof and not self._buf
 
@@ -4999,7 +5282,7 @@ class AudioOut:
 
 
 def extract_cover(path):
-    """A fájlba ágyazott borítókép (mp3), PNG bájtokban; None, ha nincs."""
+    """Cover image embedded in the file (mp3) as PNG bytes; None if there is none."""
     exe = shutil.which("ffmpeg")
     if not exe:
         return None
@@ -5013,8 +5296,8 @@ def extract_cover(path):
 
 
 class SpeakerButton(tk.Canvas):
-    """Hangszóró ikon: kattintásra némít és visszahangosít. A szint (0 néma, 1 halk, 2 hangos)
-    az ikon hullámait változtatja."""
+    """Speaker icon: click to mute and unmute. The level (0 muted, 1 quiet, 2 loud) changes the
+    waves of the icon."""
 
     def __init__(self, parent, command, size=32):
         super().__init__(parent, width=size, height=size, bg=parent.cget("bg"),
@@ -5044,7 +5327,7 @@ class SpeakerButton(tk.Canvas):
             return
         cx, cy = w / 2, h / 2
         color = "#ffffff" if self._hover else PL_TEXT
-        # hangszóró test
+        # speaker body
         self.create_polygon(cx - 9, cy - 3, cx - 5, cy - 3, cx, cy - 8, cx, cy + 8,
                             cx - 5, cy + 3, cx - 9, cy + 3, fill=color, outline=color)
         if self.level == 0:
@@ -5060,7 +5343,7 @@ class SpeakerButton(tk.Canvas):
 
 
 class FullscreenButton(tk.Canvas):
-    """Teljes képernyő ikon (négy sarok); aktív állapotban befelé néző sarkok."""
+    """Full screen icon (four corners); corners point inwards when active."""
 
     def __init__(self, parent, command, size=32):
         super().__init__(parent, width=size, height=size, bg=parent.cget("bg"),
@@ -5089,7 +5372,7 @@ class FullscreenButton(tk.Canvas):
             return
         cx, cy = w / 2, h / 2
         color = "#ffffff" if self._hover else PL_TEXT
-        d, a = 8, 5  # a sarkok távolsága a középtől, és a szárak hossza
+        d, a = 8, 5  # distance of the corners from the centre, and the length of their arms
         for sx in (-1, 1):
             for sy in (-1, 1):
                 if self.active:
@@ -5102,7 +5385,7 @@ class FullscreenButton(tk.Canvas):
 
 
 class PipButton(tk.Canvas):
-    """Kis ablak (PiP) ikon: nagy keret, benne egy kis, kitöltött ablak a sarokban."""
+    """Picture-in-picture icon: a large frame with a small filled window in the corner."""
 
     def __init__(self, parent, command, size=32):
         super().__init__(parent, width=size, height=size, bg=parent.cget("bg"),
@@ -5139,8 +5422,9 @@ class PipButton(tk.Canvas):
 
 
 class VideoPlayer(tk.Toplevel):
-    """Egyszerű beépített lejátszó videóhoz és hanganyaghoz. Az ffmpeg adja a képkockákat és a
-    hangot. Ha van hang, annak ideje a fő óra (a kép ehhez igazodik), különben falióra."""
+    """Simple built-in player for video and audio. ffmpeg provides the frames and the sound.
+    With audio, the audio time is the master clock (video follows it), otherwise the wall
+    clock."""
 
     def __init__(self, parent, path, title, info, cover=None, make_stream=None, autoplay=True,
                  volume=1.0, on_volume=None, geometry=None, on_geometry=None):
@@ -5159,10 +5443,10 @@ class VideoPlayer(tk.Toplevel):
         self._gen = 0
         self._q = queue.Queue(maxsize=4)
         self._stop = threading.Event()
-        self._start = 0.0          # a mostani képdekódolás kezdőideje
+        self._start = 0.0  # start time of the current video decode
         self._base_pos = 0.0
         self._base_wall = 0.0
-        self._awaiting = True      # falióránál az első képkockáig áll az óra
+        self._awaiting = True  # with the wall clock, time stands still until the first frame
         self._pending = None
         self._want_one = True
         self.playing = False
@@ -5172,9 +5456,9 @@ class VideoPlayer(tk.Toplevel):
         self._photo_size = None
         self._frame_item = None
         self._frame_pos = None
-        self._draw_ms = None        # a kirajzolás átlagos ideje (ms), a hibakereséshez
-        self._pix_cap = None        # ha a gép nem bírja a kép méretét: legfeljebb ennyi képpont
-        self._cost_n = 0            # a kirajzolás mért költsége a mostani méretnél
+        self._draw_ms = None  # average draw time (ms), for debugging
+        self._pix_cap = None  # if the machine cannot handle the picture size: at most this many pixels
+        self._cost_n = 0  # measured draw cost at the current size
         self._cost_ms = 0.0
         self._adapt_now = False
         self._resize_job = None
@@ -5194,7 +5478,7 @@ class VideoPlayer(tk.Toplevel):
         self._on_volume = on_volume
         self._on_geometry = on_geometry
         self._geo_job = None
-        self._geo0 = None  # a nyitáskori ablakhelyzet: csak a felhasználó változtatását mentjük
+        self._geo0 = None  # window geometry at open: only changes made by the user are saved
         self._click_job = None
         self._flash_job = None
         self.audio = None
@@ -5258,7 +5542,7 @@ class VideoPlayer(tk.Toplevel):
         self.bind(f"<{MOD_KEY}-w>", lambda e: self.close())
         self.protocol("WM_DELETE_WINDOW", self.close)
 
-        # induló méret: a videó mérete, de legfeljebb a képernyő 80 százaléka
+        # initial size: the video size, but at most 80 percent of the screen
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         if self.has_video:
             vw, vh = max(info["w"], 16), max(info["h"], 9)
@@ -5276,7 +5560,7 @@ class VideoPlayer(tk.Toplevel):
         if autoplay:
             self.after(400, self.play)
 
-    # ---------- idő ----------
+    # ---------- Time ----------
     def _pos(self):
         if self.audio is not None:
             pos = self.audio.position()
@@ -5286,7 +5570,7 @@ class VideoPlayer(tk.Toplevel):
                        self._base_pos + (time.time() - self._base_wall) * self.speed)
         return self._base_pos
 
-    # ---------- kép dekódolása ----------
+    # ---------- Video decoding ----------
     def _fit(self):
         cw, ch = max(self.canvas.winfo_width(), 2), max(self.canvas.winfo_height(), 2)
         vw, vh = max(self.info["w"], 1), max(self.info["h"], 1)
@@ -5299,8 +5583,8 @@ class VideoPlayer(tk.Toplevel):
 
     @staticmethod
     def _decode_size(disp):
-        """A kép méretét az ffmpeg állítja pontosan a megjelenítési méretre (a Pythonban a
-        nagyítás lassú volna). Csak a 4K körüli méretet korlátozzuk, ott kirajzoláskor nagyítunk."""
+        """ffmpeg scales the picture exactly to the display size (scaling in Python would be
+        slow). Only sizes around 4K are limited; those are scaled up when drawn."""
         w, h = disp
         k = (PL_MAX_PIXELS / (w * h)) ** 0.5
         if k >= 1:
@@ -5379,7 +5663,7 @@ class VideoPlayer(tk.Toplevel):
                 break
         self._video_eof_gen = None
 
-    # ---------- vezérlés ----------
+    # ---------- Controls ----------
     def toggle(self):
         if self.playing:
             self.pause()
@@ -5394,7 +5678,7 @@ class VideoPlayer(tk.Toplevel):
         if not self._alive:
             return
         if self._ended or (self.dur and self._pos() >= self.dur - 0.05):
-            self.seek_to(0.0)  # a végén újrakezdi
+            self.seek_to(0.0)  # at the end, start over
         elif self.has_video and self._proc is None:
             self._start_decoder(self._pos())
         self._ended = False
@@ -5429,8 +5713,8 @@ class VideoPlayer(tk.Toplevel):
         self._show_time(sec)
 
     def _layout_bar(self, compact):
-        """A vezérlősáv elemeinek elrendezése. Kis (PiP) ablakban csak lejátszás, keresősáv
-        és a visszaváltó gomb marad."""
+        """Lays out the control bar. In the small (PiP) window only play, seek bar and the
+        switch-back button remain."""
         for w in (self.play_btn, self.cur_lbl, self.seek, self.total_lbl, self.speaker,
                   self.vol_bar, self.fs_btn, self.pip_btn, self.note_lbl, self.speed_btn):
             if w is not None:
@@ -5452,7 +5736,7 @@ class VideoPlayer(tk.Toplevel):
                 self.speaker.pack(side="right", padx=(10, 0))
         self.seek.pack(side="left", fill="x", expand=True, padx=(8 if compact else 0, 0))
 
-    # ---------- kis ablak (PiP) ----------
+    # ---------- Small window (PiP) ----------
     def toggle_pip(self):
         if not self.has_video:
             return
@@ -5462,7 +5746,7 @@ class VideoPlayer(tk.Toplevel):
             self.enter_pip()
 
     def enter_pip(self):
-        """Kis, mindig felül lévő ablak a sarokban; a vezérlők egérmozdításra jönnek elő."""
+        """Small always-on-top window in the corner; the controls appear when the mouse moves."""
         if self.pip or not self._alive:
             return
         if self.fullscreen:
@@ -5507,7 +5791,7 @@ class VideoPlayer(tk.Toplevel):
             geo = self._pip_restore
             self.after(50, lambda: self._alive and self.geometry(geo))
 
-    # ---------- teljes képernyő ----------
+    # ---------- Full screen ----------
     def _on_escape(self, _e=None):
         if self.fullscreen:
             self.exit_fullscreen()
@@ -5535,7 +5819,7 @@ class VideoPlayer(tk.Toplevel):
             return
         self.fullscreen = True
         self.fs_btn.set_active(True)
-        # a vezérlősáv a kép fölé úszik, a kép kitölti az egész képernyőt
+        # the control bar floats over the picture, the picture fills the whole screen
         self.bar.pack_forget()
         self.bar.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw")
         self.bar.lift()
@@ -5573,7 +5857,7 @@ class VideoPlayer(tk.Toplevel):
             self._hide_job = None
 
     def _show_controls(self):
-        """Teljes képernyőn egérmozdulatra előjön a sáv, mozdulatlanság után eltűnik."""
+        """In full screen the bar appears on mouse movement and hides after inactivity."""
         if not (self.fullscreen or self.pip):
             return
         self.bar.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw")
@@ -5592,7 +5876,7 @@ class VideoPlayer(tk.Toplevel):
         self.bar.place_forget()
         self.canvas.configure(cursor="none")
 
-    # ---------- sebesség ----------
+    # ---------- Speed ----------
     def _speed_menu(self):
         menu = tk.Menu(self, tearoff=0)
         var = tk.DoubleVar(value=self.speed)
@@ -5607,8 +5891,8 @@ class VideoPlayer(tk.Toplevel):
             menu.grab_release()
 
     def set_speed(self, v):
-        """Lejátszási sebesség. A hang az ffmpeg atempo szűrőjével gyorsul (a hangmagasság marad),
-        a kép a hang órájához igazodik."""
+        """Playback speed. Audio is sped up with ffmpeg's atempo filter (pitch is kept), video
+        follows the audio clock."""
         v = min(PL_SPEEDS[-1], max(PL_SPEEDS[0], float(v)))
         if abs(v - self.speed) < 1e-6:
             return
@@ -5629,13 +5913,13 @@ class VideoPlayer(tk.Toplevel):
         j = max(0, min(len(PL_SPEEDS) - 1, i + direction))
         self.set_speed(PL_SPEEDS[j])
 
-    # ---------- ablak helyének megjegyzése ----------
+    # ---------- Remembering the window position ----------
     def _set_geo_baseline(self):
         if self._alive and not (self.fullscreen or self.pip):
             self._geo0 = self.geometry()
 
     def _report_geometry(self, geo=None):
-        """A felhasználó által megváltoztatott ablakhelyzetet jelentjük az appnak."""
+        """Reports window geometry changes made by the user to the app."""
         self._geo_job = None
         if not self._alive or self._on_geometry is None or self._geo0 is None:
             return
@@ -5646,10 +5930,9 @@ class VideoPlayer(tk.Toplevel):
         if geo and geo != self._geo0:
             self._on_geometry("video" if self.has_video else "audio", geo)
 
-    # ---------- kattintás, ugrás, hangerő ----------
+    # ---------- Click, skip, volume ----------
     def _on_click(self, _e):
-        """Egy kattintás: lejátszás/szünet. Rövid késleltetéssel, hogy a dupla kattintást
-        meg lehessen különböztetni."""
+        """Single click: play/pause, slightly delayed so a double click can be told apart."""
         if self._click_job is not None:
             self.after_cancel(self._click_job)
         self._click_job = self.after(350, self._click_toggle)
@@ -5661,12 +5944,12 @@ class VideoPlayer(tk.Toplevel):
             self._toggled_at = time.time()
 
     def _on_double_click(self, e):
-        """Dupla kattintás a kép bal felén: 15 mp vissza, a jobb felén: 15 mp előre."""
+        """Double click on the left half: back 15 s, on the right half: forward 15 s."""
         if self._click_job is not None:
             self.after_cancel(self._click_job)
             self._click_job = None
         elif time.time() - getattr(self, "_toggled_at", 0) < 0.8:
-            self.toggle()  # lassú dupla kattintás: az első kattintás váltását visszavonjuk
+            self.toggle()  # slow double click: undo the toggle of the first click
             self._toggled_at = 0
         forward = e.x >= self.canvas.winfo_width() / 2
         self.skip(15 if forward else -15, flash=True)
@@ -5681,7 +5964,7 @@ class VideoPlayer(tk.Toplevel):
             self._flash(t('{x}{x2} mp').format(x='+' if delta > 0 else '−', x2=abs(int(delta))), delta > 0)
 
     def _flash(self, text, right):
-        """Rövid jelzés a képen ugrásnál."""
+        """Short indicator on the picture when skipping."""
         c = self.canvas
         c.delete("flash")
         cw, ch = c.winfo_width(), c.winfo_height()
@@ -5722,7 +6005,7 @@ class VideoPlayer(tk.Toplevel):
 
     def toggle_mute(self):
         if self.muted and self.volume <= 0.001:
-            self.volume = 0.5  # 0-ról némítás megszüntetése: közepes hangerő
+            self.volume = 0.5  # unmuting from 0: medium volume
         self.muted = not self.muted
         self._apply_volume()
 
@@ -5739,7 +6022,7 @@ class VideoPlayer(tk.Toplevel):
         if self.dur:
             self.seek.set_value(sec / self.dur)
 
-    # ---------- megjelenítés ----------
+    # ---------- Drawing ----------
     def _on_configure(self, _e):
         if self._resize_job is not None:
             self.after_cancel(self._resize_job)
@@ -5757,12 +6040,12 @@ class VideoPlayer(tk.Toplevel):
             self._draw_cover()
             return
         if self._proc is None and self._size == (0, 0):
-            self._start_decoder(0.0)  # első megjelenés: az első képkocka
+            self._start_decoder(0.0)  # first display: the first frame
         elif self._fit() != self._disp:
             self._start_decoder(self._pos())
 
     def _draw_cover(self):
-        """Hanganyagnál: borítókép (ha van), különben egy hangjegy, alatta a cím."""
+        """For audio: the cover image (if any), otherwise a music note, with the title below."""
         c = self.canvas
         cw, ch = c.winfo_width(), c.winfo_height()
         c.delete("all")
@@ -5782,9 +6065,9 @@ class VideoPlayer(tk.Toplevel):
                       width=max(100, cw - 60), font=(FONT_FAMILY, 14, "bold"))
 
     def _draw_frame(self, data):
-        """Egy képkocka kirajzolása. Teljes képernyőn ez volt a szűk keresztmetszet: az új
-        kép és vászonelem minden kockánál sokkal lassabb, mint a meglévő képbe írás, ezért
-        ugyanazt a képet és vászonelemet frissítjük, amíg a méret nem változik."""
+        """Draws one frame. This was the bottleneck in full screen: a new image and canvas item
+        for every frame is much slower than writing into the existing image, so the same
+        image and canvas item are updated until the size changes."""
         t0 = time.perf_counter()
         ow, oh = self._size
         img = Image.frombytes("RGB", (ow, oh), data)
@@ -5805,16 +6088,16 @@ class VideoPlayer(tk.Toplevel):
             self.canvas.tag_lower("frame")
         self._frame_pos = (cw // 2, ch // 2)
         if self.playing:
-            self.canvas.update_idletasks()  # a tényleges rajzolás itt történik, így mérhető
+            self.canvas.update_idletasks()  # the actual drawing happens here, so it can be measured
         ms = (time.perf_counter() - t0) * 1000
         self._draw_ms = ms if self._draw_ms is None else self._draw_ms * 0.9 + ms * 0.1
         if self.playing:
             self._note_cost(ms)
 
     def _note_cost(self, ms):
-        """Ha egy kocka kirajzolása tartósan tovább tart, mint a kockák közti idő (pl. Mac
-        teljes képernyőn), kisebb képet kérünk, hogy a videó sima maradjon.
-        A kirajzolás ideje a kép területével arányos."""
+        """If drawing a frame keeps taking longer than the frame interval (e.g. macOS full
+        screen), a smaller picture is requested so playback stays smooth. Draw time is
+        proportional to the picture area."""
         self._cost_n += 1
         self._cost_ms = ms if self._cost_n == 1 else self._cost_ms * 0.85 + ms * 0.15
         if self._cost_n < 20:
@@ -5887,7 +6170,7 @@ class VideoPlayer(tk.Toplevel):
                 self._show_time(self._pos())
         except Exception:
             log_exc("VideoPlayer._tick")
-        # videó közben sűrűbben nézünk rá: a 15 ms + a rajzolás ideje 60 fps-nél már kockát dobott
+        # poll more often during video: 15 ms plus the draw time already dropped frames at 60 fps
         self.after(5 if (self.playing and self.has_video) else 15, self._tick)
 
     def _finish(self):
@@ -5928,8 +6211,8 @@ class VideoPlayer(tk.Toplevel):
 
 
 class MpvIpc:
-    """Az mpv vezérlőcsatornája (Unix: socket, Windows: névvel ellátott cső). Csak
-    tulajdonságokat olvasunk, a hangerő megjegyzéséhez."""
+    """mpv IPC channel (Unix socket, Windows named pipe). Only reads properties, to remember the
+    volume."""
 
     def __init__(self, path, tries=50):
         self._f = self._sock = None
@@ -5994,9 +6277,9 @@ class MpvIpc:
 
 
 class MpvPlayer:
-    """Lejátszó az mpv-vel (külön folyamat, saját ablak). Az app a fájlt átadja neki, az mpv
-    gyors, GPU-s kirajzolással játssza le, a HDR is helyesen jelenik meg.
-    Billentyűk: szóköz, nyilak (±5 mp, hangerő), m, [ ], f, p (kép a képben), Esc, q."""
+    """Player using mpv (separate process, own window). The app hands the file to mpv, which
+    plays it with fast GPU rendering and correct HDR. Keys: space, arrows (±5 s, volume), m,
+    [ ], f, p (picture in picture), Esc, q."""
 
     SPEEDS = " ".join(str(v) for v in (0.5, 0.75, 1.0, 1.25, 1.5, 2.0))
 
@@ -6038,10 +6321,10 @@ class MpvPlayer:
         if geo:
             args.append(f"--geometry={geo}")
         if is_win():
-            self._ipc_path = r"\\.\pipe\phdl_mpv_%d_%d" % (os.getpid(), int(time.time()))
+            self._ipc_path = r"\\.\pipe\vidripper_mpv_%d_%d" % (os.getpid(), int(time.time()))
         else:
             self._ipc_path = os.path.join(tempfile.gettempdir(),
-                                          f"phdl_mpv_{os.getpid()}_{int(time.time())}.sock")
+                                          f"vidripper_mpv_{os.getpid()}_{int(time.time())}.sock")
         self._sock_path = None if is_win() else self._ipc_path
         args.append(f"--input-ipc-server={self._ipc_path}")
         args.append(path)
@@ -6053,13 +6336,13 @@ class MpvPlayer:
         self._watch()
 
     def _watch(self):
-        """Ha az mpv ablakát bezárták, az app is tudja."""
+        """Lets the app know when the mpv window was closed."""
         if self._proc is not None and self._proc.poll() is not None:
             code = self._proc.returncode
             early = time.time() - self._started < 4
             self._cleanup()
             if early and code is not None and code > 0 and code != 4:
-                # az mpv rögtön kilépett: hiányzó rendszerfájl, sérült fájl vagy hibás beállítás
+                # mpv quit immediately: missing system library, broken file or bad option
                 show_dialog(self.parent, "warning",
                             t('Az mpv lejátszó nem indult el rendesen (hibakód: {code}).\nHa a fájl más programban lejátszható, nézd meg, hogy az mpv teljes és friss-e.\n').format(code=code) + (
                                 t("Windowson ehhez a videókártya friss illesztőprogramja is kell.")
@@ -6072,7 +6355,7 @@ class MpvPlayer:
                 pass
 
     def _poll_volume(self):
-        """A hangerőt másodpercenként elkérjük az mpv-től, hogy az app megjegyezze."""
+        """Asks mpv for the volume every second so the app can remember it."""
         try:
             ipc = MpvIpc(self._ipc_path)
         except OSError:
@@ -6117,8 +6400,8 @@ class MpvPlayer:
 
 
 def release_popups(parent):
-    """Ha egy legördülő menü nyitva van (például a felbontásé), az magához ragadja az egeret és a
-    billentyűzetet, és a felugró ablak nem kapna semmit. Ezért előtte bezárjuk őket."""
+    """An open combobox dropdown (e.g. the resolution) grabs the mouse and keyboard, and a new
+    dialog would receive nothing. So they are closed first."""
     def walk(w):
         if isinstance(w, ttk.Combobox):
             try:
@@ -6142,16 +6425,16 @@ def show_dialog(parent, kind, message):
     parent.wait_window(dlg)
 
 
-def ask_playlist(parent, title, entries, capped, res_values, default_res):
-    """Lejátszási lista kiválasztó. (kiválasztott elemek, felbontás) vagy None."""
+def ask_playlist(parent, title, entries, capped, res_values, default_res, sb_label=None):
+    """Playlist picker. (chosen items, resolution, extras) or None."""
     release_popups(parent)
-    dlg = PlaylistDialog(parent, title, entries, capped, res_values, default_res)
+    dlg = PlaylistDialog(parent, title, entries, capped, res_values, default_res, sb_label)
     parent.wait_window(dlg)
     return dlg.result
 
 
 def ask_password(parent, heading, message, labels, ok_text, validate=None, danger=False):
-    """Jelszó bekérése. A beírt értékek listája, vagy None, ha mégsem."""
+    """Asks for a password. The list of entered values, or None if cancelled."""
     release_popups(parent)
     dlg = PasswordDialog(parent, heading, message, labels, ok_text, validate, danger)
     parent.wait_window(dlg)
@@ -6159,20 +6442,20 @@ def ask_password(parent, heading, message, labels, ok_text, validate=None, dange
 
 
 def show_confirm(parent, heading, message, yes_text=t("Igen"), no_text=t("Nem"), danger=False):
-    """Igen/Nem kérdés. True, ha az Igen (vagy a megadott első) gombot nyomták meg."""
+    """Yes/No question. True if Yes (or the given first button) was pressed."""
     release_popups(parent)
     dlg = ConfirmDialog(parent, heading, message, yes_text, no_text, danger)
     parent.wait_window(dlg)
     return dlg.result
 
 
-# ---------- maga az alkalmazás ----------
+# ---------- The application ----------
 class LockMixin:
-    """Az előzmények jelszavas védelme és a tétlenség miatti zárolás."""
+    """Password protection of the history and locking after inactivity."""
 
-    # ---------- az előzmények jelszavas védelme ----------
+    # ---------- History password protection ----------
     def _build_lock_overlay(self, tab):
-        """Zárolt állapotban ez a panel takarja az Előzmények fület."""
+        """When locked, this panel covers the history page."""
         self._lock_overlay = tk.Frame(tab, bg=BG)
         self.lock_pw = tk.StringVar()
         center = tk.Frame(self._lock_overlay, bg=BG)
@@ -6198,7 +6481,7 @@ class LockMixin:
         forgot.bind("<Button-1>", lambda e: self.forgot_password())
 
     def _apply_lock_state(self):
-        """A zárolás látszó következményei: takaró az előzményeken, rejtett előző mappák."""
+        """Visible effects of locking: a cover over the history, previous folders hidden."""
         if self.hist_locked:
             self._lock_overlay.place(x=0, y=0, relwidth=1, relheight=1)
             self._lock_overlay.lift()
@@ -6218,15 +6501,15 @@ class LockMixin:
         self._last_activity = time.time()
 
     def _lock_tick(self):
-        """Beállított tétlenség után újra zárol."""
+        """Locks again after the idle time."""
         try:
-            pointer = self.root.winfo_pointerxy()  # az egér mozgása is aktivitás
+            pointer = self.root.winfo_pointerxy()  # mouse movement counts as activity too
             if pointer != self._last_pointer:
                 self._last_pointer = pointer
                 self._touch()
             if (self.lock and not self.hist_locked
                     and time.time() - self._last_activity > LOCK_IDLE_MINUTES * 60):
-                self.lock_now()  # ha épp nyitva az oldal, a takaró azonnal rákerül
+                self.lock_now()  # if the page is open, the cover appears immediately
             self.root.after(5000, self._lock_tick)
         except tk.TclError:
             pass
@@ -6238,7 +6521,7 @@ class LockMixin:
         self._apply_lock_state()
 
     def _check_password(self, password):
-        """(rendben-e, hibaüzenet). Sok hibás próba után rövid várakozás van."""
+        """(ok, error message). After many wrong attempts there is a short wait."""
         now = time.time()
         if now < self._lock_blocked_until:
             wait = int(self._lock_blocked_until - now) + 1
@@ -6264,7 +6547,7 @@ class LockMixin:
         self._apply_lock_state()
 
     def forgot_password(self):
-        """Elfelejtett jelszó: az előzmények törlődnek, a jelszavas védelem megszűnik."""
+        """Forgotten password: the history is deleted and the protection is turned off."""
         if not show_confirm(
                 self.root, t("Elfelejtett jelszó"),
                 t("A jelszó visszaállításával az összes előzmény és a hozzájuk tartozó "
@@ -6295,7 +6578,7 @@ class LockMixin:
             return
         self.lock = make_lock(res[0])
         self.settings["history_lock"] = self.lock
-        self.hist_locked = False  # most adtad meg, ezért nyitva marad a következő zárolásig
+        self.hist_locked = False  # just set, so it stays unlocked until the next lock
         self._last_activity = time.time()
         self._save_settings()
         self._apply_lock_state()
@@ -6335,9 +6618,9 @@ class LockMixin:
         self._save_settings()
         self._apply_lock_state()
 
-    def _build_lock_section(self, body, row):  # a Beállítások "Előzmények védelme" kártyája
+    def _build_lock_section(self, body, row):  # the "History protection" card in Settings
         self._card_head(body, row, t("Előzmények védelme"),
-                        t("Jelszóval elrejtheted az Előzmények oldalt (a futó letöltésekkel "
+                        t("Jelszóval elrejtheted a Könyvtár oldalt (a futó letöltésekkel "
                           "együtt) és a korábbi letöltési útvonalak listáját a kíváncsi szemek "
                           "elől. Az app indítása után és {n} perc tétlenség után újra kéri a "
                           "jelszót.").format(n=LOCK_IDLE_MINUTES))
@@ -6382,34 +6665,38 @@ class LockMixin:
 
 
 class HistoryMixin:
-    """Az Előzmények fül: lista, részletek, műveletek."""
+    """The history (Library) page: list, details, actions."""
+
+    def _eid(self, i):
+        """Permanent id of entry i (assigned now if somehow missing)."""
+        return self.history[i].setdefault("id", new_entry_id())
 
     def _build_history_tab(self, tab):
-        """Az Előzmények oldal: felül a futó letöltések (FOLYAMATBAN), alatta a kész
-        videók kártyái. Egy kártyára kattintva kinyílik a részletekkel és a gombokkal."""
+        """The history page: running downloads (IN PROGRESS) on top, cards of finished videos
+        below. Clicking a card expands it with details and buttons."""
         tab.columnconfigure(0, weight=1)
         self._search_var = tk.StringVar()
         self._search_open = False
-        self._hist_view = []      # a látszó kártyák indexei az előzmények listájában
-        self._hist_index = None   # a kinyitott kártya
+        self._hist_view = []  # history indices of the visible cards
+        self._hist_index = None  # the expanded card
         self._hist_url = ""
         self._hist_thumb_bytes = None
         self._hist_shown = HIST_PAGE
-        self._hist_cards = {}     # előzmény index -> kártya elemei
+        self._hist_cards = {}  # history index -> card widgets
         self._hist_photo_cache = {}
         self._sel_mode = False
         self._sel = set()
         self._sel_anchor = None
-        self._fresh = {}          # (útvonal, dátum) -> mikor készült el (ebben a futásban)
+        self._fresh = {}  # (path, date) -> when it finished (in this session)
         self.hist_default_btn = None
-        ttk.Label(tab, text=t("Előzmények"), style="AboutTitle.TLabel").grid(
+        ttk.Label(tab, text=t("Könyvtár"), style="AboutTitle.TLabel").grid(
             row=0, column=0, sticky="w")
         self._hist_sort = "date"
         self._hist_kind = "all"
-        self._missing = set()  # a lemezen már nem található fájlok útvonalai
+        self._missing = set()  # paths of files no longer found on disk
         self._missing_gen = 0
-        self._probed = set()  # a hosszukért már megnézett fájlok (futásonként egyszer)
-        # a gombok külön sorban, a cím alatt: keskeny ablakban sem csúsznak a címre
+        self._probed = set()  # files already probed for their duration (once per session)
+        # buttons on their own row below the title, so they never overlap it in a narrow window
         tools = tk.Frame(tab, bg=BG)
         tools.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         tools.columnconfigure(3, weight=1)
@@ -6428,7 +6715,7 @@ class HistoryMixin:
                                                font=small)
         self.clear_done_btn.grid(row=0, column=4, padx=(0, 8))
         self.clear_done_btn.grid_remove()
-        # mint a torrent appok "teknős" gombja: egy kattintással be/ki
+        # like the "turtle" button of torrent apps: one click on/off
         self.speed_btn = secondary_button(tools, self._speed_label(), self.toggle_speed_limit,
                                           width=190, height=32, font=small)
         self.speed_btn.grid(row=0, column=5)
@@ -6438,7 +6725,7 @@ class HistoryMixin:
         head.columnconfigure(0, weight=1)
         self._history_sub = ttk.Label(head, text="", style="Sub.TLabel")
         self._history_sub.grid(row=0, column=0, sticky="w", pady=(4, 14))
-        # a keresősor csak a Keresés gombra jelenik meg
+        # the search row only appears after pressing Search
         self._search_row = tk.Frame(head, bg=BG)
         self._search_row.columnconfigure(0, weight=1)
         box = RoundBox(self._search_row, lambda p: tk.Entry(
@@ -6457,7 +6744,7 @@ class HistoryMixin:
             self.root.bind(seq, self._open_search_shortcut, add="+")
         area = self._build_history_scroll_area(tab)
 
-        # kijelölés mód sávja
+        # selection mode bar
         self.sel_bar = RoundCard(area)
         self.sel_bar.set_outline("ACCENT")
         self.sel_bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -6469,7 +6756,7 @@ class HistoryMixin:
         self.sel_label.grid(row=0, column=0, sticky="w")
         sel_btns = tk.Frame(bar, bg=PANEL)
         sel_btns.grid(row=0, column=1, sticky="e", padx=(12, 0))
-        # a felirat tördelődik, ha nem fér el; a gombok nem takarják ki
+        # the label wraps if it does not fit; the buttons never cover it
         bar.bind("<Configure>", lambda e: self.sel_label.configure(
             wraplength=max(80, e.width - sel_btns.winfo_reqwidth() - 40)), add="+")
         secondary_button(sel_btns, t("Mind kijelölése"), self._hist_select_all, width=130,
@@ -6482,10 +6769,11 @@ class HistoryMixin:
                          font=small).pack(side="left")
         self.sel_bar.grid_remove()
 
-        # futó letöltések
+        # running downloads
         self._build_jobs_section(area)
 
-        # kész videók: a kártyák külön elemek a vásznon (self._hist_stack), alattuk a lábléc
+        # finished videos: each card is a separate canvas item (self._hist_stack), the footer below
+        # them
         foot = tk.Frame(self.hist_canvas, bg=BG)
         foot.columnconfigure(0, weight=1)
         self._hist_stack.add(foot, footer=True)
@@ -6535,16 +6823,17 @@ class HistoryMixin:
             pass
 
     def _refresh_history_list(self, keep_page=False, expand=None):
-        """A kártyák újraépítése (keresés, nézet, új vagy törölt bejegyzés után).
-        `expand`: ennek a bejegyzésnek (index) a kártyája nyitva épül fel."""
+        """Rebuilds the cards (after search, view change, new or deleted entry). `expand`: the
+        card of this entry (index) is built expanded."""
         self.root.after_idle(self._update_nav_badges)
         expanded = self.history[expand] if expand is not None and expand < len(self.history) \
             else self._selected_history_entry()
         self._hist_stack.clear()
         self._hist_cards = {}
+        self._hist_first_head = None  # (group, label) at the top of the list, in the date view
         if not keep_page:
             self._hist_shown = HIST_PAGE
-        if self.hist_locked:  # zárolva semmi nem látszik
+        if self.hist_locked:  # nothing is visible while locked
             self._hist_view = []
             self._hist_index = None
             if self._search_open or self._search_var.get():
@@ -6554,14 +6843,16 @@ class HistoryMixin:
             return
         query = self._search_var.get()
         self._hist_view = history_view(self.history, query, self._hist_sort, self._hist_kind)
-        self._sel &= set(self._hist_view)
+        # the selection stores entry ids, not indices, so it stays put when a new download is
+        # inserted at the top
+        self._sel &= {self._eid(i) for i in self._hist_view}
         self._hist_index = None
         if expanded is not None:
             self._hist_index = next((i for i in self._hist_view
                                      if self.history[i] is expanded), None)
         self._build_hist_cards(0, min(self._hist_shown, len(self._hist_view)))
         if self._hist_index is not None:
-            # a kinyitott kártya akkor is azonnal elkészül, ha a sorrendben hátrébb van
+            # the expanded card is built right away even if it comes later in the order
             self._finish_hist_build()
         self._check_missing_async()
         self._refresh_hist_subtitle()
@@ -6572,7 +6863,7 @@ class HistoryMixin:
         if not self.history and self._sel_mode:
             self.toggle_select_mode()
         self._refresh_sel_bar()
-        if self.history and not self._hist_view:  # van előzmény, de nincs találat
+        if self.history and not self._hist_view:  # there is history, but no match
             self.hist_empty.kind = "search"
             self.hist_empty.title = t("Nincs találat")
             self.hist_empty.hint = (t("Próbálj másik kifejezést vagy szűrést.")
@@ -6591,7 +6882,7 @@ class HistoryMixin:
             self.hist_empty.hint = (t("A Beállításokban bekapcsolhatod.") if off
                                     else t("Az elkészült letöltéseid itt jelennek meg."))
             self.hist_empty._draw()
-            # futó letöltés mellett nem kell a nagy üres jelzés
+            # no big empty state needed while a download is running
             if any(j.ui for j in self.jobs):
                 self.hist_empty.grid_remove()
             else:
@@ -6599,7 +6890,7 @@ class HistoryMixin:
             self.hist_clear_btn.grid_remove()
 
     def _search_changed(self):
-        """Gépelés közben nem építünk újra minden betűre: 200 ms szünet után."""
+        """No rebuild on every keystroke while typing: after a 200 ms pause."""
         job = getattr(self, "_search_job", None)
         if job is not None:
             try:
@@ -6619,7 +6910,7 @@ class HistoryMixin:
         self._build_hist_cards(start, min(self._hist_shown, len(self._hist_view)))
 
     def _hist_group_of(self, entry):
-        """Csoport dátum szerinti rendezésnél: Ma, Tegnap, Korábban."""
+        """Group when sorted by date: Today, Yesterday, Earlier."""
         try:
             day = datetime.fromisoformat(entry.get("date") or "").date()
         except (TypeError, ValueError):
@@ -6632,8 +6923,9 @@ class HistoryMixin:
         return t("KORÁBBAN")
 
     def _build_hist_cards(self, start, end):
-        """A kártyák részletekben épülnek: az első HIST_CHUNK azonnal, a többi apránként a
-        háttérben, így sok előzménynél sem akad meg az app (gépelés, kész letöltés)."""
+        """Cards are built in parts: the first HIST_CHUNK immediately, the rest in small batches
+        in the background, so a long history never freezes the app (typing, finished
+        download)."""
         self._hist_gen = getattr(self, "_hist_gen", 0) + 1
         self._hist_build = [start, end]
         if not start:
@@ -6658,7 +6950,7 @@ class HistoryMixin:
             self._hist_build_done(end)
 
     def _finish_hist_build(self):
-        """A még hátralévő kártyák azonnali elkészítése."""
+        """Builds the remaining cards right away."""
         if getattr(self, "_hist_build", None):
             start, end = self._hist_build
             self._hist_build = None
@@ -6684,9 +6976,11 @@ class HistoryMixin:
                 group = self._hist_group_of(entry)
                 if group != last_group:
                     title = t("LETÖLTVE · {x}").format(x=group) if pos == 0 else group
-                    stack.add(tk.Label(frame, text=title, bg=BG, fg=GREY,
-                                       font=get_font(10, "bold"), anchor="w"),
-                              top=4 if pos == 0 else 12, bottom=6, padx=4)
+                    head = stack.add(tk.Label(frame, text=title, bg=BG, fg=GREY,
+                                              font=get_font(10, "bold"), anchor="w"),
+                                     top=4 if pos == 0 else 12, bottom=6, padx=4)
+                    if pos == 0:
+                        self._hist_first_head = (group, head)
                     last_group = group
             elif pos == 0:
                 stack.add(tk.Label(frame, text=t("LETÖLTVE"), bg=BG, fg=GREY,
@@ -6696,7 +6990,7 @@ class HistoryMixin:
         self._hist_last_group = last_group
 
     def _entry_meta(self, entry):
-        """A kártya második sora: feltöltő · oldal · méret · idő."""
+        """Second line of the card: uploader · site · size · time."""
         parts = []
         uploader = " ".join(str(entry.get("uploader") or "").split())
         if uploader:
@@ -6734,18 +7028,18 @@ class HistoryMixin:
         return photo
 
     def _entry_status(self, entry):
-        """(szöveg, szín) a kártya jobb felső sarkába."""
+        """(text, colour) for the top right corner of the card."""
         if entry.get("path") in self._missing:
             return t("A fájl nem található"), DANGER
         if (entry.get("path"), entry.get("date")) in self._fresh:
             return t("●  Új"), ok_color()
         return t("✓  Letöltve"), GREY
 
-    def _build_hist_card(self, parent, i, entry):
-        """Összecsukva: nagy bélyegkép, mellette cím, feltöltő, feltöltés dátuma, hossz.
-        Kinyitva alatta a többi adat és a gombok (animáció nélkül, azonnal)."""
+    def _build_hist_card(self, parent, i, entry, before=None):
+        """Collapsed: large thumbnail with title, uploader, upload date and duration. Expanded:
+        the other details and the buttons below (no animation)."""
         card = RoundCard(parent)
-        self._hist_stack.add(card, bottom=8)
+        self._hist_stack.add(card, bottom=8, before=before)
         inner = card.inner
         inner.columnconfigure(0, weight=1)
         hdr = tk.Frame(inner, bg=PANEL, cursor="hand2")
@@ -6779,16 +7073,18 @@ class HistoryMixin:
         labels.append(ui["facts"])
         for k, lab in enumerate(labels):
             lab.pack(fill="x", pady=(0 if k == 0 else 4, 0))
-        # a hosszú cím a kártya szélességéhez tördelődik, nem lóg ki
+        # long titles wrap to the card width instead of overflowing
         info.bind("<Configure>", lambda e, labs=labels: [
             lab.configure(wraplength=max(40, e.width)) for lab in labs])
         text, color = self._entry_status(entry)
         ui["status"] = tk.Label(hdr, text=text, bg=PANEL, fg=color, font=get_font(12, "bold"))
         ui["status"].grid(row=0, column=3, sticky="ne", padx=(12, 0))
 
+        # the card looks up its index when clicked: when a download finishes the list shifts under
+        # it without a rebuild (see _insert_hist_entry)
         def bind_tree(widget):
-            widget.bind("<Button-1>", lambda e, k=i: self._hist_card_click(k, e), add="+")
-            widget.bind("<Double-Button-1>", lambda e, k=i: self._hist_card_double(k))
+            widget.bind("<Button-1>", lambda e, u=ui: self._ui_click(u, e), add="+")
+            widget.bind("<Double-Button-1>", lambda e, u=ui: self._ui_double(u))
             for child in widget.winfo_children():
                 bind_tree(child)
         bind_tree(hdr)
@@ -6798,8 +7094,98 @@ class HistoryMixin:
             self._expand_card(i, scroll=False)
         return ui
 
+    def _ui_index(self, ui):
+        """Current history index of the card, or None."""
+        return next((k for k, v in self._hist_cards.items() if v is ui), None)
+
+    def _ui_click(self, ui, event):
+        i = self._ui_index(ui)
+        if i is not None:
+            self._hist_card_click(i, event)
+
+    def _ui_double(self, ui):
+        i = self._ui_index(ui)
+        if i is not None:
+            self._hist_card_double(i)
+
+    def _insert_hist_entry(self, prev_history):
+        """After a download finishes, puts the new entry's card at the top and keeps the rest (a
+        full rebuild takes over a second with 100 cards). Only in the default view: by date,
+        no search or filter, and only if no other entry disappeared meanwhile. True on
+        success; otherwise the caller rebuilds the list."""
+        entry = self.history[0] if self.history else None
+        head = getattr(self, "_hist_first_head", None)
+        if (entry is None or self.hist_locked or self._hist_sort != "date"
+                or self._search_var.get().strip()
+                or self._hist_kind not in ("all", entry_kind(entry))
+                or getattr(self, "_hist_build", None) or not self._hist_cards or head is None):
+            return False
+        new_index = {id(e): k for k, e in enumerate(self.history)}
+        moved = {}
+        for k, ui in self._hist_cards.items():
+            old = prev_history[k] if k < len(prev_history) else None
+            if old is None or id(old) not in new_index:
+                return False  # an entry disappeared meanwhile (same file, full list)
+            moved[new_index[id(old)]] = ui
+        view = history_view(self.history, "", "date", self._hist_kind)
+        if not view or view[0] != 0 or len(view) < 2 or view[1] not in moved:
+            return False
+        old_index = self._hist_index
+        expanded = prev_history[old_index] if old_index is not None \
+            and old_index < len(prev_history) else None
+        self._hist_cards = moved
+        self._hist_view = view
+        self._hist_index = new_index.get(id(expanded)) if expanded is not None else None
+        self._sel &= {self._eid(k) for k in view}
+        group, label = head
+        first_card = moved[view[1]]["card"]  # the one that was shown first so far
+        new_group = self._hist_group_of(entry)
+        try:
+            if new_group == group:
+                self._build_hist_card(self.hist_canvas, 0, entry, before=first_card)
+            else:  # first download today: a new group title goes on top
+                label.configure(text=group)
+                self._hist_stack.items[next(n for n, r in enumerate(self._hist_stack.items)
+                                            if r["w"] is label)]["top"] = 12
+                new_head = self._hist_stack.add(
+                    tk.Label(self.hist_canvas, text=t("LETÖLTVE · {x}").format(x=new_group),
+                             bg=BG, fg=GREY, font=get_font(10, "bold"), anchor="w"),
+                    top=4, bottom=6, padx=4, before=label)
+                self._hist_first_head = (new_group, new_head)
+                self._build_hist_card(self.hist_canvas, 0, entry, before=label)
+        except tk.TclError:
+            return False
+        if len(view) > self._hist_shown:  # the page grows by one, so nothing falls off the end
+            self._hist_shown += 1
+        self._hist_build_done(min(self._hist_shown, len(view)))
+        self.root.after_idle(self._update_nav_badges)
+        self._refresh_hist_subtitle()
+        for btn in (self.search_btn, self.view_btn, self.select_btn):
+            btn.grid()
+        self.hist_empty.grid_remove()
+        self.hist_clear_btn.grid()
+        self._refresh_sel_bar()
+        return True
+
+    def _recolor_hist_cards(self):
+        """After a theme change the cards are not rebuilt: retheme already replaced the colours,
+        only the thumbnails (their corners use the card colour), the status and the marker
+        are refreshed here."""
+        for i, ui in list(self._hist_cards.items()):
+            try:
+                if "photo" in ui:
+                    photo = self._hist_photo(ui["entry"], THUMB_BIG)
+                    if photo is not None:
+                        ui["thumb"].configure(image=photo)
+                        ui["photo"] = photo
+                text, color = self._entry_status(ui["entry"])
+                ui["status"].configure(text=text, fg=color)
+                self._paint_card(i)
+            except tk.TclError:
+                continue
+
     def _entry_facts(self, entry):
-        """A cím alatti sor: eredeti feltöltés dátuma és hossz (ha ismert)."""
+        """The line below the title: original upload date and duration (if known)."""
         parts = []
         up = entry_upload_date(entry)
         if up:
@@ -6810,13 +7196,13 @@ class HistoryMixin:
         return " · ".join(parts) or self._entry_meta(entry)
 
     def _paint_card(self, i):
-        """A kártya bal szélén nyíl vagy kijelölő kör, és a kerete."""
+        """Arrow or selection circle on the left edge of the card, and its outline."""
         ui = self._hist_cards.get(i)
         if not ui:
             return
         lead = ui["lead"]
         lead.delete("all")
-        selected = i in self._sel
+        selected = i < len(self.history) and self._eid(i) in self._sel
         if self._sel_mode:
             if selected:
                 lead.create_oval(2, 2, 20, 20, fill=col("ACCENT"), outline=col("ACCENT"))
@@ -6833,14 +7219,16 @@ class HistoryMixin:
     def _hist_card_click(self, i, event):
         if self._sel_mode:
             shift = bool(event.state & 0x1)
-            if shift and self._sel_anchor in self._hist_view and i in self._hist_view:
-                a, b = sorted((self._hist_view.index(self._sel_anchor), self._hist_view.index(i)))
-                self._sel |= set(self._hist_view[a:b + 1])
-            elif i in self._sel:
-                self._sel.discard(i)
+            # the anchor of a Shift range is an id too, so it does not shift
+            anchor = next((k for k in self._hist_view if self._eid(k) == self._sel_anchor), None)
+            if shift and anchor is not None and i in self._hist_view:
+                a, b = sorted((self._hist_view.index(anchor), self._hist_view.index(i)))
+                self._sel |= {self._eid(k) for k in self._hist_view[a:b + 1]}
+            elif self._eid(i) in self._sel:
+                self._sel.discard(self._eid(i))
             else:
-                self._sel.add(i)
-            self._sel_anchor = i
+                self._sel.add(self._eid(i))
+            self._sel_anchor = self._eid(i)
             for k in list(self._hist_cards):
                 self._paint_card(k)
             self._refresh_sel_bar()
@@ -6851,7 +7239,7 @@ class HistoryMixin:
             self._expand_card(i)
 
     def _hist_card_double(self, i):
-        """Dupla kattintás: lejátszás az app lejátszójával (a kártya nyitva marad)."""
+        """Double click: play with the app's player (the card stays expanded)."""
         if self._sel_mode:
             return
         if self._hist_index != i:
@@ -6869,7 +7257,7 @@ class HistoryMixin:
             return
         entry = ui["entry"]
         key = (entry.get("path"), entry.get("date"))
-        if key in self._fresh:  # megnézted: az "Új" jelzés eltűnik
+        if key in self._fresh:  # seen: the "New" badge disappears
             del self._fresh[key]
             text, color = self._entry_status(entry)
             ui["status"].configure(text=text, fg=color)
@@ -6880,8 +7268,8 @@ class HistoryMixin:
         self._paint_card(i)
 
     def _expand_card(self, i, scroll=True):
-        """Egy kártya kinyitása (egyszerre egy): a kép alatt, balra igazítva a többi adat,
-        alatta a gombok. A mappa és a link kattintható, és ki is jelölhető."""
+        """Expands a card (one at a time): the other details below the image, left aligned, the
+        buttons below them. Folder and link are clickable and selectable."""
         if self._hist_index is not None and self._hist_index != i:
             self._collapse_card(self._hist_index)
         ui = self._hist_cards.get(i)
@@ -6941,7 +7329,7 @@ class HistoryMixin:
             self.root.after_idle(lambda: self._scroll_card_into_view(i))
 
     def _fade_in_status(self, i):
-        """A friss letöltés "Új" jelzése gyorsan előtűnik (csak ha épp látszik a kártya)."""
+        """Quickly fades in the "New" badge of a fresh download (only if the card is visible)."""
         ui = self._hist_cards.get(i)
         if not ui or not self._card_in_view(i):
             return
@@ -6971,7 +7359,7 @@ class HistoryMixin:
             return False
 
     def _scroll_card_into_view(self, i):
-        """Ha a kinyitott kártya alja kilóg, annyit görgetünk, hogy látsszon."""
+        """If the bottom of the expanded card is out of view, scrolls just enough to show it."""
         ui = self._hist_cards.get(i)
         if not ui:
             return
@@ -6979,7 +7367,7 @@ class HistoryMixin:
             canvas = self.hist_canvas
             canvas.update_idletasks()
             box = self._hist_stack.bounds(ui["card"])
-            if box is None:  # közben újraépült a lista
+            if box is None:  # the list was rebuilt in the meantime
                 return
             top, height = box
             bottom = top + height
@@ -6995,7 +7383,7 @@ class HistoryMixin:
         except tk.TclError:
             pass
 
-    # ---------- kijelölés mód ----------
+    # ---------- Selection mode ----------
     def toggle_select_mode(self):
         self._sel_mode = not self._sel_mode
         self._sel = set()
@@ -7008,7 +7396,7 @@ class HistoryMixin:
         for k in list(self._hist_cards):
             self._paint_card(k)
         self._refresh_sel_bar()
-        for job in self.jobs:  # kijelölésnél a futó letöltések halványak
+        for job in self.jobs:  # running downloads are dimmed while selecting
             self._update_job_ui(job)
 
     def _refresh_sel_bar(self):
@@ -7025,7 +7413,7 @@ class HistoryMixin:
     def _hist_select_all(self, _event=None):
         if not self._sel_mode:
             self.toggle_select_mode()
-        self._sel = set(self._hist_view)
+        self._sel = {self._eid(i) for i in self._hist_view}
         for k in list(self._hist_cards):
             self._paint_card(k)
         self._refresh_sel_bar()
@@ -7049,7 +7437,7 @@ class HistoryMixin:
                 self._delete_selected()
                 return "break"
 
-    # ---------- hiányzó fájlok ----------
+    # ---------- Missing files ----------
     def _missing_done(self, gen, gone, lengths=None):
         if gen != self._missing_gen:
             return
@@ -7057,7 +7445,7 @@ class HistoryMixin:
         if lengths:
             for entry in self.history:
                 if entry.get("path") in lengths and "duration" not in entry:
-                    entry["duration"] = lengths[entry["path"]]  # 0: nem sikerült, nem próbáljuk újra
+                    entry["duration"] = lengths[entry["path"]]  # 0: failed, do not retry
             save_json(HISTORY_FILE, self.history)
             for i, ui in list(self._hist_cards.items()):
                 try:
@@ -7067,7 +7455,7 @@ class HistoryMixin:
         self._apply_missing_marks()
 
     def _apply_missing_marks(self):
-        """A kártyák állapota: hiányzó fájl, frissen kész vagy letöltve."""
+        """Card states: missing file, just finished or downloaded."""
         for i, ui in list(self._hist_cards.items()):
             if i >= len(self.history):
                 continue
@@ -7079,15 +7467,16 @@ class HistoryMixin:
             self._paint_card(i)
 
     def _open_history_entries(self, entries):
-        """Az értesítésre vagy a kész letöltésre kattintva: Előzmények, kinyitva az első."""
+        """Clicking the notification or a finished download: history page with the first one
+        expanded."""
         self._switch_tab("2")
         if self.hist_locked or not entries:
             return
 
         def find(entry):
             for i, e in enumerate(self.history):
-                if e is entry or (e.get("path") == entry.get("path") and
-                                  e.get("date") == entry.get("date")):
+                if e is entry or (entry.get("id") and e.get("id") == entry.get("id")) or (
+                        e.get("path") == entry.get("path") and e.get("date") == entry.get("date")):
                     return i
             return None
         indices = [i for i in (find(e) for e in entries) if i is not None]
@@ -7095,13 +7484,13 @@ class HistoryMixin:
             self._open_history_index(indices[0])
 
     def _open_history_index(self, index):
-        """Az Előzmények oldalon kinyitja és megmutatja az adott bejegyzést."""
+        """Expands and shows the given entry on the history page."""
         self._switch_tab("2")
         if self.hist_locked or index >= len(self.history):
             return
         if self._sel_mode:
             self.toggle_select_mode()
-        if index not in self._hist_view:  # szűrés vagy keresés miatt nem látszik: alap nézet
+        if index not in self._hist_view:  # hidden by a filter or search: back to the default view
             if getattr(self, "_search_open", False):
                 self._close_search()
             else:
@@ -7116,9 +7505,10 @@ class HistoryMixin:
         self._refresh_history_list(keep_page=True, expand=index)
 
     def _selected_history_indices(self):
-        """Kijelölés módban a kijelöltek (a nézet sorrendjében), különben a kinyitott."""
+        """The selected entries in selection mode (in view order), otherwise the expanded one."""
         if self._sel_mode:
-            return [i for i in self._hist_view if i in self._sel and i < len(self.history)]
+            return [i for i in self._hist_view
+                    if i < len(self.history) and self._eid(i) in self._sel]
         i = self._hist_index
         return [i] if i is not None and i < len(self.history) else []
 
@@ -7133,7 +7523,7 @@ class HistoryMixin:
         if btn is None:
             return
         if name and name.lower().endswith(" player") and len(name) > 12:
-            name = name[:-7]  # "QuickTime Player" helyett "QuickTime": rövidebb gombfelirat
+            name = name[:-7]  # "QuickTime" instead of "QuickTime Player": shorter button label
         try:
             btn.set_text(t('Lejátszás ({name})').format(name=name) if name
                          else t("Lejátszás (alap)"))
@@ -7166,14 +7556,14 @@ class HistoryMixin:
         self._refresh_history_list(keep_page=True)
 
     def _render_hist_thumb(self):
-        """Témaváltás után a kártyák újraépülnek (a bélyegképek sarka a kártya színű)."""
+        """After a theme change: recolours the cards (no rebuild)."""
         try:
-            self._refresh_history_list(keep_page=True)
+            self._recolor_hist_cards()
         except (AttributeError, tk.TclError):
             pass
 
     def _build_history_scroll_area(self, tab):
-        """Görgethető terület: hosszú link vagy kis ablak esetén sem csúszik ki semmi."""
+        """Scrollable area, so nothing slides out with a long link or a small window."""
         tab.rowconfigure(3, weight=1)
         wrap = tk.Frame(tab, bg=BG)
         wrap.grid(row=3, column=0, sticky="nsew")
@@ -7183,8 +7573,8 @@ class HistoryMixin:
         self.hist_bar = ttk.Scrollbar(wrap, orient="vertical", command=self.hist_canvas.yview)
         self.hist_canvas.configure(yscrollcommand=self._hist_scroll_set)
         self.hist_canvas.grid(row=0, column=0, sticky="nsew")
-        # a fejléc és a futó letöltések egy elem, alatta minden kártya külön (CanvasStack);
-        # jobb oldalon hely marad a görgetősávnak
+        # the header and the running downloads are one item, every card below is separate
+        # (CanvasStack); room is left on the right for the scrollbar
         self._hist_stack = CanvasStack(self.hist_canvas)
         area = tk.Frame(self.hist_canvas, bg=BG)
         self._hist_stack.add(area, keep=True)
@@ -7192,8 +7582,8 @@ class HistoryMixin:
         return area
 
     def _hist_scroll_set(self, lo, hi):
-        """A görgetősáv csak akkor látszik, ha nem fér el minden. Görgetéskor a
-        képernyőn kívül megváltozott elemek (pl. új futó letöltés) is a helyükre kerülnek."""
+        """Shows the scrollbar only when not everything fits. While scrolling, items that
+        changed off screen (e.g. a new running download) are put in place too."""
         auto_scrollbar(self.hist_bar, lo, hi, row=0, column=1, sticky="ns")
         self._hist_stack.relayout_soon()
 
@@ -7215,7 +7605,7 @@ class HistoryMixin:
         self._save_settings()
 
     def set_history_limit(self, _event=None):
-        """Az előzmények méretének váltása: csak kisebbre váltáskor törlődnek a régebbiek."""
+        """Changes the history size: older entries are only deleted when making it smaller."""
         label = self.history_limit_var.get()
         new = next((v for v, text in HISTORY_LIMITS if text == label), self.history_limit)
         cap = history_cap(new)
@@ -7239,7 +7629,7 @@ class HistoryMixin:
 
     def _add_history(self, entry, refresh=True):
         cap = history_cap(self.history_limit)
-        if cap == 0:  # nincs előzmény: semmi nem kerül a listába
+        if cap == 0:  # no history: nothing is added to the list
             prune_thumbs(self.history)
             return
         self.history = add_history_entry(self.history, entry, cap)
@@ -7274,16 +7664,17 @@ class HistoryMixin:
             self._hist_kind = kind
         self._refresh_history_list()
 
-    # ---------- hiányzó fájlok ----------
+    # ---------- Missing files ----------
     def _check_missing_async(self):
-        """A fájlok meglétét háttérszál nézi: egy nem elérhető NAS ne fagyassza le az appot."""
+        """File existence is checked on a background thread, so an unreachable NAS cannot freeze
+        the app."""
         self._missing_gen += 1
         gen = self._missing_gen
         paths = [e.get("path") for e in self.history if e.get("path")]
-        # a régebbi bejegyzésekből hiányzik a videó hossza: a fájlból pótoljuk (egyszer)
+        # older entries have no duration: fill it in from the file (once)
         no_len = [e["path"] for e in self.history if e.get("path") and "duration" not in e
                   and e["path"] not in self._probed][:HIST_PROBE_MAX]
-        self._probed.update(no_len)  # egy gyors újabb frissítés ne nézze meg őket még egyszer
+        self._probed.update(no_len)  # a quick second refresh must not probe them again
 
         def work():
             gone = {p for p in paths if not os.path.exists(p)}
@@ -7294,14 +7685,14 @@ class HistoryMixin:
                 media = probe_media(path)
                 lengths[path] = round(media["duration"]) if media and media["duration"] else 0
             try:
-                self.root.after(0, lambda: self._missing_done(gen, gone, lengths))
+                self._post(lambda: self._missing_done(gen, gone, lengths))
             except (RuntimeError, tk.TclError):
                 pass
 
         threading.Thread(target=work, daemon=True).start()
 
     def _toggle_search(self):
-        """A Keresés gomb: megjeleníti vagy elrejti (és törli) a keresősort."""
+        """The Search button: shows or hides (and clears) the search row."""
         if self.hist_locked:
             return
         if self._search_open:
@@ -7322,7 +7713,7 @@ class HistoryMixin:
     def _close_search(self):
         self._search_open = False
         self._search_row.grid_remove()
-        self._search_var.set("")  # a szűrés megszűnik, a teljes lista visszajön
+        self._search_var.set("")  # the filter is cleared, the full list comes back
         self.root.focus_set()
 
     def _clear_search(self):
@@ -7340,7 +7731,7 @@ class HistoryMixin:
             show_dialog(self.root, "warning", t('Nem találom a fájlt és a mappáját sem ezen az útvonalon:\n\n{x}').format(x=entry['path']))
 
     def _playable_entry(self):
-        """A kiválasztott bejegyzés, ha a fájlja megvan; különben hibaüzenet és None."""
+        """The selected entry if its file exists; otherwise an error message and None."""
         entry = self._selected_history_entry()
         if entry is None:
             return None
@@ -7350,7 +7741,8 @@ class HistoryMixin:
         return entry
 
     def _refresh_default_player_label(self, path):
-        """Az alap lejátszó nevét a gombra írja. A lekérdezés háttérben fut, mert lassú lehet."""
+        """Puts the default player's name on the button. The lookup runs in the background
+        because it can be slow."""
         ext = os.path.splitext(path)[1].lower()
         if ext in _PLAYER_NAMES:
             self._set_default_label(_PLAYER_NAMES[ext])
@@ -7360,7 +7752,7 @@ class HistoryMixin:
         def work():
             name = default_player_name(path)
             try:
-                self.root.after(0, lambda: self._apply_player_label(path, name))
+                self._post(lambda: self._apply_player_label(path, name))
             except (RuntimeError, tk.TclError):
                 pass
         threading.Thread(target=work, daemon=True).start()
@@ -7387,7 +7779,7 @@ class HistoryMixin:
             self._open_mpv_player(entry)
 
     def _open_builtin_player(self, entry):
-        """A saját, ffmpeg-alapú lejátszó (a Beállításokban választható)."""
+        """The app's own ffmpeg-based player (selectable in Settings)."""
         if not HAS_PIL or not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             show_dialog(self.root, "warning", t("A beépített lejátszóhoz ffmpeg kell, de nincs "
                         "telepítve.\n") + ffmpeg_hint() + t("\n\n"
@@ -7418,7 +7810,7 @@ class HistoryMixin:
                                    on_geometry=self._remember_player_geom)
 
     def _open_mpv_player(self, entry):
-        """Az mpv lejátszó (külön folyamat, gyors, HDR-képes)."""
+        """The mpv player (separate process, fast, HDR capable)."""
         if not shutil.which("mpv"):
             show_dialog(self.root, "warning", t("A lejátszóhoz az mpv kell, de nincs telepítve.\n")
                         + mpv_hint() + t("\n\nVálthatsz a beépített lejátszóra a Beállításokban, "
@@ -7440,7 +7832,7 @@ class HistoryMixin:
     def _remember_player_geom(self, kind, geo):
         if kind in self.player_geom and PLAYER_GEO_RE.match(geo or ""):
             self.player_geom[kind] = geo
-            self._remember_volume(self.player_volume)  # ugyanaz a késleltetett mentés
+            self._remember_volume(self.player_volume)  # the same delayed save
 
     def _remember_volume(self, value):
         self.player_volume = round(value, 3)
@@ -7467,12 +7859,13 @@ class HistoryMixin:
 
 
 class SettingsMixin:
-    """A Beállítások fül és a görgetése."""
+    """The Settings page and its scrolling."""
 
-    # ---------- sebességkorlát ----------
+    # ---------- Speed limit ----------
     def _apply_speed_limit(self):
-        """A közös korlát érvényesítése; a futó letöltésekre azonnal hat."""
-        on = self.speed_limit_on and self.speed_limit in SPEED_LIMITS_MB
+        """Applies the shared limit; affects running downloads immediately."""
+        # custom values count too, not only the presets
+        on = self.speed_limit_on and bool(self.speed_limit)
         set_speed_limit(self.speed_limit * 1_000_000 if on else None,
                         lambda: sum(1 for j in list(self.jobs) if j.state == "active") or 1)
         self._refresh_speed_ui()
@@ -7542,7 +7935,8 @@ class SettingsMixin:
             row.grid_remove()
 
     def _custom_row(self, body, row, unit, on_apply):
-        """Egyéni érték sora: kis mező, mértékegység, Enterre vagy kilépéskor érvényes."""
+        """Row for a custom value: small field and unit, applied on Enter or when leaving the
+        field."""
         line = tk.Frame(body, bg=PANEL)
         line.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         tk.Label(line, text=t("Egyéni érték:"), bg=PANEL, fg=GREY,
@@ -7563,7 +7957,7 @@ class SettingsMixin:
         line.grid_remove()
         return line, var, entry, msg
 
-    # ---------- egyszerre futó letöltések ----------
+    # ---------- Parallel downloads ----------
     def _parallel_text(self):
         if not self.max_parallel:
             return t("Minden letöltés egyszerre fut, nincs várakozó sor.")
@@ -7606,7 +8000,7 @@ class SettingsMixin:
         except (AttributeError, tk.TclError):
             pass
         self._save_settings()
-        self._pump()  # ha nőtt a keret, a várakozók azonnal indulnak
+        self._pump()  # if the limit grew, waiting downloads start right away
 
     def set_embed_metadata(self, mode):
         self.embed_metadata = mode == "on"
@@ -7638,7 +8032,7 @@ class SettingsMixin:
         self.settings["toast_anim"] = value
         self.toasts.anim = value
         self._save_settings()
-        # rögtön látszik, milyen lesz
+        # show right away what it will look like
         self.toasts.show(t("Így jelenik meg az értesítés"), t('Animáció: {x}').format(x=TOAST_ANIMS[value]),
                          header=t("Minta"))
 
@@ -7649,7 +8043,7 @@ class SettingsMixin:
         self._refresh_temp_ui()
 
     def _refresh_temp_ui(self):
-        """A mappa sora csak a "Helyi lemez" módban látszik; mutatja a szabad helyet is."""
+        """The folder row is only shown in "Local disk" mode; it shows the free space too."""
         if self.temp_local:
             self.temp_row.grid()
         else:
@@ -7690,16 +8084,16 @@ class SettingsMixin:
         self.settings["notify_sound"] = self.notify_sound
         self._save_settings()
 
-    # ---------- a Beállítások fül ----------
+    # ---------- The Settings page ----------
     def _set_scroll_set(self, lo, hi):
-        """A görgetősáv csak akkor látszik, ha nem fér el minden beállítás."""
+        """Shows the scrollbar only when not all settings fit."""
         auto_scrollbar(self.set_bar, lo, hi, row=0, column=1, sticky="ns")
         if hasattr(self, "_set_stack"):
             self._set_stack.relayout_soon()
 
     def _install_scroll_router(self):
-        """Egy helyen kezeljük a görgetést: az egér alatti elemtől felfelé keressük a
-        görgethető oldalt. Így nincs olyan elem (felirat, új kártya), amin megakadna."""
+        """Scrolling is handled in one place: the scrollable page is found by walking up from
+        the widget under the mouse, so no widget (label, new card) can block it."""
         self._scroll_areas = {self.set_canvas: (self._set_wheel, self._set_tab_visible),
                               self.hist_canvas: (self._hist_wheel, self._hist_tab_visible),
                               self.main_canvas: (self._main_wheel, self._main_tab_visible)}
@@ -7710,7 +8104,7 @@ class SettingsMixin:
             self.root.bind_all("<TouchpadScroll>", lambda e: self._route_scroll(e, touch=True),
                                add="+")
         except tk.TclError:
-            pass  # régebbi Tk, nincs ilyen esemény
+            pass  # older Tk without this event
 
     def _scroll_area_at(self, event):
         try:
@@ -7741,7 +8135,7 @@ class SettingsMixin:
             pass
 
     def _scroll_canvas(self, canvas, event, step=None):
-        """Egérgörgő: kattanásonként SCROLL_WHEEL_PX képpont, rövid lassuló animációval."""
+        """Mouse wheel: SCROLL_WHEEL_PX pixels per notch, with a short easing animation."""
         if step is None:
             try:
                 delta = float(event.delta)
@@ -7757,7 +8151,7 @@ class SettingsMixin:
 
     @staticmethod
     def _scroll_metrics(canvas):
-        """(teljes magasság, látható magasság) képpontban."""
+        """(total height, visible height) in pixels."""
         try:
             region = [float(v) for v in str(canvas.cget("scrollregion")).split()]
             total = region[3] - region[1] if len(region) == 4 else 0
@@ -7769,14 +8163,14 @@ class SettingsMixin:
         return max(1.0, total), max(1, canvas.winfo_height())
 
     def _scroll_by(self, canvas, pixels, smooth):
-        """Képpontos görgetés. Az érintőpad pontosan követi az ujjat (smooth=False), az
-        egérgörgő lassulva csúszik a célig. Képkockánként legfeljebb egyszer rajzolunk."""
+        """Pixel-precise scrolling. The touchpad follows the finger exactly (smooth=False), the
+        mouse wheel eases to the target. At most one redraw per frame."""
         total, visible = self._scroll_metrics(canvas)
         if total <= visible:
             return
         if getattr(canvas, "_sc_job", None) is None:
-            # nincs futó mozgás: a jelenlegi helyzetből indulunk (közben a görgetősávval
-            # vagy kódból is elmozdulhatott)
+            # no motion in progress: start from the current position (it may have moved via the
+            # scrollbar or code)
             canvas._sc_pos = canvas.yview()[0] * total
             canvas._sc_target = canvas._sc_pos
         canvas._sc_target = max(0.0, min(total - visible, canvas._sc_target + pixels))
@@ -7792,7 +8186,7 @@ class SettingsMixin:
             target = max(0.0, min(total - visible, canvas._sc_target))
             diff = target - canvas._sc_pos
             if canvas._sc_smooth and abs(diff) > 0.6:
-                canvas._sc_pos += diff * SCROLL_EASE   # lassulva közelít
+                canvas._sc_pos += diff * SCROLL_EASE  # eases in
             else:
                 canvas._sc_pos = target
             canvas.yview_moveto(canvas._sc_pos / total)
@@ -7803,9 +8197,10 @@ class SettingsMixin:
             pass
 
     def _touchpad_scroll(self, canvas, event):
-        """Tk 9 (Mac): az érintőpad és a Magic Mouse <TouchpadScroll> eseményt küld, nem MouseWheel-t."""
+        """Tk 9 (macOS): the touchpad and Magic Mouse send <TouchpadScroll>, not MouseWheel."""
         try:
-            # a %D két 16 bites előjeles számot tartalmaz: felül a vízszintes, alul a függőleges
+            # %D holds two signed 16-bit numbers: horizontal in the high half, vertical in the low
+            # half
             raw = int(event.delta)
         except (TypeError, ValueError):
             return
@@ -7828,14 +8223,14 @@ class SettingsMixin:
             return
 
     def _build_settings_tab(self, tab):
-        """A Beállítások oldal: csoportokba rendezett kártyák egy görgethető oszlopban.
-        Új beállításhoz egy új _card_... függvény kell, és fel kell venni a csoportjába."""
+        """The Settings page: cards in groups in a scrollable column. A new setting needs a new
+        _card_... function added to its group."""
         tab.columnconfigure(0, weight=1)
         ttk.Label(tab, text=t("Beállítások"), style="AboutTitle.TLabel").grid(
             row=0, column=0, sticky="w")
         ttk.Label(tab, text=t("Nyelv, megjelenés, értesítések, letöltés, előzmények és védelem"),
                   style="Sub.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 22))
-        # görgethető terület: sok beállítás esetén sem csúszik ki semmi az ablakból
+        # scrollable area, so nothing slides out of the window with many settings
         tab.rowconfigure(2, weight=1)
         wrap = tk.Frame(tab, bg=BG)
         wrap.grid(row=2, column=0, sticky="nsew")
@@ -7845,8 +8240,8 @@ class SettingsMixin:
         self.set_bar = ttk.Scrollbar(wrap, orient="vertical", command=self.set_canvas.yview)
         self.set_canvas.configure(yscrollcommand=self._set_scroll_set)
         self.set_canvas.grid(row=0, column=0, sticky="nsew")
-        # minden kártya külön elem a vásznon (CanvasStack): a nem látszók nem rajzolódnak;
-        # jobb oldalon hely marad a görgetősávnak, a gombok ne lógjanak bele
+        # every card is a separate canvas item (CanvasStack): hidden ones are not drawn; room is
+        # left on the right so buttons do not overlap the scrollbar
         self._set_stack = CanvasStack(self.set_canvas, end_pad=20)
         body = self.set_canvas
         self._set_body = body
@@ -7856,7 +8251,7 @@ class SettingsMixin:
             (t("ÁLTALÁNOS"), (self._card_language, self._card_theme,
                               self._card_notifications)),
             (t("LETÖLTÉS"), (self._card_parallel, self._card_speed, self._card_temp,
-                             self._card_metadata,
+                             self._card_filename, self._card_metadata,
                              self._card_sponsorblock, self._card_cookies)),
             (t("LEJÁTSZÁS"), (self._card_player,)),
             (t("ELŐZMÉNYEK"), (self._card_history_size, self._card_lock)),
@@ -7872,9 +8267,9 @@ class SettingsMixin:
         self._about_refresh()
 
 
-    # ---------- a Beállítások kártyái ----------
+    # ---------- Settings cards ----------
     def _new_card(self):
-        """Új kártya a Beállítások oszlopába; a tartalma a visszaadott keretbe kerül."""
+        """New card in the Settings column; its content goes into the returned frame."""
         card = RoundCard(self._set_body)
         self._set_stack.add(card, bottom=12)
         self._set_row += 1
@@ -7884,7 +8279,7 @@ class SettingsMixin:
 
     @staticmethod
     def _card_head(body, row, title, info=None):
-        """Kártya címe, mellette az info ikon (a leírás csak rámutatva jelenik meg)."""
+        """Card title with an info icon next to it (the description only shows on hover)."""
         line = tk.Frame(body, bg=PANEL)
         line.grid(row=row, column=0, sticky="w")
         tk.Label(line, text=title, bg=PANEL, fg=TEXT, font=get_font(14, "bold")).pack(
@@ -7895,7 +8290,7 @@ class SettingsMixin:
 
     @staticmethod
     def _card_combo(body, row, variable, values, on_select):
-        """Teljes szélességű lenyíló lista a kártya címe alatt."""
+        """Full-width combobox below the card title."""
         box = RoundBox(body, lambda p: ttk.Combobox(
             p, textvariable=variable, state="readonly", style="Flat.TCombobox",
             values=list(values)))
@@ -7943,7 +8338,8 @@ class SettingsMixin:
             self.toast_anim, self.set_toast_anim, 260)
 
     def _card_temp(self, body):
-        """Ideiglenes fájlok helye: NAS-ra letöltéshez a helyi lemez kíméli a hálózati tárat."""
+        """Location of temporary files: when downloading to a NAS, the local disk spares the
+        network storage."""
         self._card_head(body, 0, t("Ideiglenes fájlok helye"),
                         t("Az alkalmazás letöltés közben ideiglenes fájlokkal dolgozik. Ez néha "
                           "gondot jelenthet, ha közvetlenül NAS gépre töltesz le, például a NAS "
@@ -7990,7 +8386,7 @@ class SettingsMixin:
                           str(self.max_parallel))
 
     def _card_speed(self, body):
-        """Sebességkorlát: az összes letöltés együtt legfeljebb ennyivel tölthet."""
+        """Speed limit: all downloads together may use at most this much."""
         self._card_head(body, 0, t("Sebességkorlát"),
                         t("Ha bekapcsolod, a letöltések együtt legfeljebb ennyi sebességgel "
                           "töltenek, így a többi gép és alkalmazás is kényelmesen használhatja "
@@ -8009,7 +8405,7 @@ class SettingsMixin:
         self._refresh_speed_ui()
 
     def _card_metadata(self, body):
-        """Adatok a fájlba: borító, cím, előadó (mp3), fejezetek (videó)."""
+        """Metadata in the file: cover, title, artist (mp3), chapters (video)."""
         self._card_head(body, 0, t("Adatok beégetése a fájlba"),
                         t("A letöltött fájlba belekerül a borítókép, a cím, az előadó vagy a "
                           "feltöltő, videónál a fejezetek is. Így a zenelejátszók és a "
@@ -8020,7 +8416,7 @@ class SettingsMixin:
         self.meta_ctl.grid(row=0, column=1, sticky="e")
 
     def _card_sponsorblock(self, body):
-        """SponsorBlock: mit kezdjen a jelölt részekkel, és mely részekkel."""
+        """SponsorBlock: what to do with the marked segments, and which ones."""
         self._card_head(body, 0, t("SponsorBlock"),
                         t("A SponsorBlock a nézők által jelölt részeket ismeri YouTube "
                           "videókban, például a szponzorált részeket vagy a bevezetőket. Ha egy "
@@ -8044,15 +8440,45 @@ class SettingsMixin:
             self.sb_cat_vars[key] = var
 
     def _card_cookies(self, body):
-        """Böngésző sütik: alapból Nincs, csak ha egy oldalhoz szükség lenne rá."""
+        """Browser cookies: None by default, only needed for some sites."""
         self._card_head(body, 0, t("Böngésző sütik használata"),
                         t("Ezt alapból hagyd a „Nincs” lehetőségen. Csak akkor válts, ha egy "
                           "oldal bejelentkezést vagy sütit kér a tartalmak megjelenítéséhez."))
-        # a mentett érték a belső név ("Nincs" vagy a böngésző), a lista a lefordított nevet mutatja
+        # the saved value is the internal name ("Nincs" or the browser), the list shows the
+        # translated name
         self.browser_shown = tk.StringVar(value=browser_label(self.browser.get()))
         self._card_combo(body, 1, self.browser_shown, [browser_label(b) for b in BROWSERS],
                          lambda e: self.browser.set(next(
                              b for b in BROWSERS if browser_label(b) == self.browser_shown.get())))
+
+    def _card_filename(self, body):
+        self._card_head(body, 0, t("Fájlnév"),
+                        t("Ebből áll össze a letöltött fájl neve. A felbontás (például 1080p) "
+                          "videónál mindig a végére kerül, így ugyanaz a videó két minőségben "
+                          "nem írja felül egymást. A már letöltött fájlok neve nem változik."))
+        self.name_style_var = tk.StringVar(value=NAME_STYLES[NAME_STYLE])
+        self._card_combo(body, 1, self.name_style_var, NAME_STYLES.values(), self.set_name_style)
+        self.name_example = tk.Label(body, text="", bg=PANEL, fg=GREY, anchor="w",
+                                     font=(FONT_FAMILY, 12))
+        self.name_example.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self._refresh_name_example()
+
+    def _refresh_name_example(self):
+        sample = {"title": t("Videó címe"), "uploader": t("Csatorna"),
+                  "upload_date": datetime.now().strftime("%Y%m%d")}
+        try:
+            self.name_example.configure(text=t("Például: {x}").format(
+                x=build_basename(sample, 1080) + ".mp4"))
+        except (AttributeError, tk.TclError):
+            pass
+
+    def set_name_style(self, _event=None):
+        global NAME_STYLE
+        label = self.name_style_var.get()
+        NAME_STYLE = next((k for k, v in NAME_STYLES.items() if v == label), NAME_STYLE)
+        self._save_settings()
+        self._refresh_name_example()
+        self._refresh_details()  # the file name shown on the downloader page is updated too
 
     def _card_player(self, body):
         self._card_head(body, 0, t("Beépített lejátszó"),
@@ -8111,26 +8537,26 @@ class SettingsMixin:
         small = (FONT_FAMILY, 13)
         secondary_button(btns, t("Verziótörténet"), self.show_changelog, width=150,
                          height=36, font=small).pack(side="left")
-        if not is_mac():  # Macen az alkalmazásmenü "About" pontja nyitja
+        if not is_mac():  # opened from the "About" item of the macOS app menu
             secondary_button(btns, t("Névjegy"), self.show_about, width=110, height=36,
                              font=small).pack(side="left", padx=(10, 0))
 
 class UpdateMixin:
-    """About ablak és az yt-dlp frissítése."""
+    """About window and yt-dlp updates."""
 
-    # ---------- Névjegy ablak (Macen az alkalmazásmenü "About Vid-Ripper" pontja) ----------
+    # ---------- About window (macOS app menu "About Vid-Ripper") ----------
     def _setup_about_menu(self):
-        if not is_mac():  # máshol a Beállítások végén a Névjegy gomb nyitja
+        if not is_mac():  # elsewhere the About button at the end of Settings opens it
             return
         try:
             self.root.createcommand("tkAboutDialog", self.show_about)
-            # a Tk ettől teszi az alkalmazásmenübe a "Settings…" pontot, Cmd+, gyorsbillentyűvel
+            # this makes Tk add "Settings…" with Cmd+, to the app menu
             self.root.createcommand("::tk::mac::ShowPreferences", self.show_settings)
         except Exception:
             log_exc("_setup_about_menu")
 
     def show_settings(self):
-        """Beállítások oldal (Macen az alkalmazásmenüből vagy Cmd+, billentyűvel)."""
+        """Settings page (from the macOS app menu or Cmd+,)."""
         try:
             self.root.deiconify()
             self._nav_go("set")
@@ -8168,7 +8594,7 @@ class UpdateMixin:
             pass
 
     def _open_update_settings(self):
-        """A piros sávra kattintva: Beállítások, a yt-dlp frissítés kártyájához görgetve."""
+        """Clicking the red banner: Settings, scrolled to the yt-dlp update card."""
         self._switch_tab("3")
 
         def scroll():
@@ -8180,13 +8606,35 @@ class UpdateMixin:
                 pass
         self.root.after(80, scroll)
 
+    # ---------- New Vid-Ripper version (checked once at startup) ----------
+    def _check_app_update(self):
+        def work():
+            latest = fetch_app_release()
+            try:
+                self._post(self._app_update_done, latest)
+            except (RuntimeError, tk.TclError):
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _app_update_done(self, latest):
+        self._app_update_latest = latest
+        show = app_update_available(latest)
+        try:
+            row = self.app_update_row
+            if show and not row.winfo_ismapped():
+                row.pack(side="bottom", pady=(0, 10), after=self.kofi_btn)
+            elif not show and row.winfo_ismapped():
+                row.pack_forget()
+        except tk.TclError:
+            pass
+
     def _periodic_update_check(self):
-        """Ha sokáig nyitva van az app, időnként újra megnézi, van-e új yt-dlp."""
+        """If the app stays open for long, checks for a new yt-dlp from time to time."""
         self._start_update_check()
         self.root.after(UPDATE_CHECK_INTERVAL_MS, self._periodic_update_check)
 
     def _about_refresh(self):
-        """A frissítéssel kapcsolatos feliratok és gombok állapotának újraolvasása."""
+        """Refreshes the labels and buttons related to updating."""
         self._refresh_update_banner()
         try:
             self.update_label.configure(text=self._update_text())
@@ -8201,7 +8649,7 @@ class UpdateMixin:
         self._about_refresh()
 
     def _load_about_icon(self):
-        """Az app ikonja az About ablakhoz. Ha nincs meg az icon.png, ikon nélkül jelenik meg."""
+        """App icon for the About window. Shown without an icon if icon.png is missing."""
         if self._about_icon_img is not None:
             return self._about_icon_img
         path = resource_path("icon.png")
@@ -8224,9 +8672,9 @@ class UpdateMixin:
             return
         self._about_win = AboutDialog(self.root, self, self._load_about_icon())
 
-    # ---------- Újdonságok (verziótörténet és a főképernyő értesítése) ----------
+    # ---------- What's new (version history and the sidebar notice) ----------
     def show_changelog(self):
-        """Megnyitja az Újdonságok ablakot. Az első megnyitás után az értesítés eltűnik."""
+        """Opens the What's new window. The notice disappears after the first opening."""
         win = self._changelog_win
         if win is not None and win.winfo_exists():
             bring_to_front(win)
@@ -8237,16 +8685,16 @@ class UpdateMixin:
         self._save_settings()
 
     def _refresh_news_pill(self):
-        """Az értesítés addig látszik, amíg az aktuális verzió újdonságait meg nem nyitották."""
+        """The notice stays until the current version's notes have been opened."""
         show = self.seen_version != APP_VERSION
         if show and not self.news_pill.winfo_ismapped():
             self.news_pill.pack(pady=(0, 8))
         elif not show and self.news_pill.winfo_ismapped():
             self.news_pill.pack_forget()
 
-    # ---------- yt-dlp frissítés (keresés, letöltés, telepítés) ----------
+    # ---------- yt-dlp update (check, download, install) ----------
     def check_ytdlp_update(self):
-        """A "Frissítés keresése" gomb."""
+        """The "Check for updates" button."""
         self._start_update_check(manual=True)
 
     def _start_update_check(self, manual=False):
@@ -8261,7 +8709,7 @@ class UpdateMixin:
 
     def _check_update(self, manual):
         release = fetch_ytdlp_release()
-        self.root.after(0, self._update_check_done, release, manual)
+        self._post(self._update_check_done, release, manual)
 
     def _update_check_done(self, release, manual):
         self._checking = False
@@ -8281,7 +8729,7 @@ class UpdateMixin:
         self._about_refresh()
 
     def download_ytdlp_update(self):
-        """A "Frissítés letöltése" gomb: az új yt-dlp letöltése, ellenőrzése, telepítése."""
+        """The "Download update" button: downloads, verifies and installs the new yt-dlp."""
         release = self._latest_release
         if not release or not self.can_download_update():
             return
@@ -8296,18 +8744,18 @@ class UpdateMixin:
             pct = int(done * 100 / total) if total else None
             if pct != last[0]:
                 last[0] = pct
-                self.root.after(0, self._set_update_status,
-                                t('Letöltés: {pct}%').format(pct=pct) if pct is not None else t("Letöltés..."))
+                self._post(self._set_update_status,
+                           t('Letöltés: {pct}%').format(pct=pct) if pct is not None else t("Letöltés..."))
 
         try:
             data = download_ytdlp_wheel(release, progress)
-            self.root.after(0, self._set_update_status, t("Ellenőrzés és telepítés..."))
+            self._post(self._set_update_status, t("Ellenőrzés és telepítés..."))
             install_ytdlp_wheel(data, YTDLP_LIB_DIR, release["version"])
-            self.root.after(0, self._update_install_done, release["version"], None)
+            self._post(self._update_install_done, release["version"], None)
         except Exception as e:
-            own = isinstance(e, RuntimeError)  # a saját, már magyar hibaüzeneteink
+            own = isinstance(e, RuntimeError)  # our own error messages, already user-friendly
             text = str(e) if own else explain_error(str(e), self.browser.get())[0]
-            self.root.after(0, self._update_install_done, release["version"], text)
+            self._post(self._update_install_done, release["version"], text)
 
     def _update_install_done(self, version, error):
         self._update_busy = None
@@ -8317,15 +8765,21 @@ class UpdateMixin:
             return
         self._installed_ver = version
         self._set_update_status(t('Kész: a(z) {version} verzió letöltve. Indítsd újra az appot, hogy életbe lépjen.').format(version=version))
+        # as with a language change: offer to restart right away (_on_close asks if downloads are
+        # running)
+        if show_confirm(self.root, t("yt-dlp frissítés"),
+                        t("Az új yt-dlp az app újraindítása után lép életbe."),
+                        yes_text=t("Újraindítás most"), no_text=t("Később")):
+            self._on_close(restart=True)
 
 
 class DownloaderMixin:
-    """A Letöltő fül: link, adatok lekérése, lejátszási lista."""
+    """The Downloader page: link, fetching info, playlists."""
 
-    # ---------- a Letöltő fül görgetése ----------
+    # ---------- Downloader page scrolling ----------
     def _main_scroll_set(self, lo, hi):
-        """A görgetősáv csak akkor látszik, ha a fül tartalma nem fér el (pl. teljes képernyőn
-        Windowson, nagyobb skálázásnál): így a Letöltés gomb sosem csúszik ki az ablakból."""
+        """Shows the scrollbar only when the page does not fit (e.g. full screen on Windows with
+        larger scaling), so the Download button never slides out of the window."""
         auto_scrollbar(self.main_bar, lo, hi, row=0, column=1, sticky="ns")
 
     def _main_tab_visible(self):
@@ -8358,7 +8812,7 @@ class DownloaderMixin:
         ttk.Label(main, text=t("Másold be a videó linkjét, vagy több linket soronként."),
                   style="Sub.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 22))
 
-        # figyelmeztetés, ha van új yt-dlp (régi yt-dlp-vel egyre több oldal nem működik)
+        # banner when a new yt-dlp is available (more and more sites break with an old yt-dlp)
         self.ytdlp_banner = RoundButton(
             main, t("⚠  Új yt-dlp frissítés érhető el, telepítsd a Beállításokban."),
             self._open_update_settings, height=38, bg="DANGER", fg="#ffffff", hover="DANGER",
@@ -8366,9 +8820,9 @@ class DownloaderMixin:
         self.ytdlp_banner.grid(row=3, column=0, sticky="ew", pady=(0, 16))
         self.ytdlp_banner.grid_remove()
 
-        # (a böngésző süti választó az About ablakban van, alapból "Nincs")
+        # (the browser cookie picker is in Settings, default "None")
 
-        # link: saját kártyában
+        # link: in its own card
         link_card = RoundCard(main)
         link_card.grid(row=5, column=0, sticky="ew", pady=(0, 16))
         link_card.inner.configure(padx=16, pady=14)
@@ -8390,21 +8844,21 @@ class DownloaderMixin:
         url_box.widget.bind("<<Paste>>", self._paste_url)
         self.url.trace_add("write", lambda *_: url_box.set_clear_visible(bool(self.url.get())))
         self._url_box = url_box
-        # egy kiemelés oldalanként: itt csak a Letöltés gomb színes, ez másodlagos
+        # one highlight per page: only the Download button is coloured, this one is secondary
         self.fetch_btn = secondary_button(url_row, t("Videó adatai"), self.fetch_info, width=130,
                                           height=36)
         self.fetch_btn.grid(row=0, column=1, padx=(10, 0))
-        # az adatlekérés haladása: csak lekérés közben látszik
+        # fetch progress: only visible while fetching
         self.fetch_bar = RoundProgress(url_row, height=6)
         self.fetch_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.fetch_bar.grid_remove()
 
-        # videó előnézet (bélyegkép + adatok), kezdetben rejtve
+        # video preview (thumbnail + details), hidden at first
         self.preview = PreviewCard(main)
         self.preview.grid(row=6, column=0, sticky="ew", pady=(0, 16))
         self.preview.grid_remove()
 
-        # a letöltés beállításai: egy kártya, soronként címkével és értékkel
+        # download options: one card, a label and a value per row
         card = RoundCard(main)
         card.grid(row=7, column=0, sticky="ew", pady=(0, 18))
         self._opt_inner = card.inner
@@ -8418,8 +8872,7 @@ class DownloaderMixin:
         self._build_folder_row()
         self._update_audio_ui()
 
-        # letöltés
-        # a fő gomb jobbra, a Mac-es szokás szerint (mellette balra a Megszakítás)
+        # Download is the main button on the right, as usual on macOS (Cancel to its left)
         dl_row = ttk.Frame(main)
         dl_row.grid(row=9, column=0, sticky="ew")
         dl_row.columnconfigure(0, weight=1)
@@ -8435,7 +8888,8 @@ class DownloaderMixin:
         self.status_label_main = ttk.Label(main, textvariable=self.status, style="Status.TLabel",
                                            wraplength=500)
         self.status_label_main.grid(row=10, column=0, sticky="w", padx=(4, 0), pady=(18, 0))
-        # letöltésre kész állapot: a mentési név és a teendő külön sorban, más színnel
+        # ready to download: the file name and the next step on separate lines, in different
+        # colours
         ready = tk.Frame(main, bg=BG)
         ready.grid(row=10, column=0, sticky="ew", padx=(4, 0), pady=(18, 0))
         ready.columnconfigure(0, weight=1)
@@ -8455,10 +8909,10 @@ class DownloaderMixin:
 
 
 
-    # ---------- a letöltő oldal beállítás-sorai ----------
+    # ---------- Option rows of the downloader page ----------
     def _option_row(self, index, text):
-        """Egy sor a letöltés beállításai kártyán: elválasztó vonal, balra a felirat.
-        (a sor kerete, a felirat sora, amibe jobbra a vezérlő kerül)"""
+        """A row on the download options card: separator line, label on the left. Returns (row
+        frame, label line that the control is packed into on the right)."""
         row = tk.Frame(self._opt_inner, bg=PANEL)
         row.grid(row=index, column=0, sticky="ew")
         if index:
@@ -8470,7 +8924,7 @@ class DownloaderMixin:
 
     def _build_resolution_row(self):
         res_row, line = self._option_row(0, t("Felbontás"))
-        # a lehetőségek listáját ez a (nem látható) lenyíló tartja, a választás a kapszulán megy
+        # this (hidden) combobox holds the options, the choice is made on the segmented control
         self.res_box = ttk.Combobox(line, textvariable=self.resolution, state="disabled",
                                     style="Chip.TCombobox", values=[], width=14,
                                     font=(FONT_FAMILY, 13))
@@ -8482,17 +8936,17 @@ class DownloaderMixin:
                                  bg=PANEL, fg=GREY, font=(FONT_FAMILY, 12), anchor="w")
         self.res_hint.pack(fill="x")
         self.resolution.trace_add("write", lambda *a: self._res_seg_select())
-        # HDR: csak akkor látszik, ha a videónak van HDR változata
+        # HDR: only shown when the video has an HDR variant
         self.hdr_check = make_check(res_row, t("letöltés HDR minőségben"), self.hdr,
                                     self._on_hdr_change)
-        # szűk ablakban a négyzet a felbontás alatt kap külön sort
+        # in a narrow window the checkbox gets its own row below the resolution
         self.hdr_line = tk.Frame(res_row, bg=PANEL)
         self.hdr_row_parent = line
         line.bind("<Configure>", lambda e: self._place_hdr())
 
 
     def _build_quality_row(self):
-        # a hangminőség csak a "Csak audio" választásakor látszik
+        # audio quality is only shown when "Audio only" is selected
         self.quality_row, line = self._option_row(1, t("Hangminőség"))
         qbox = ttk.Combobox(line, textvariable=self.quality, state="readonly",
                             style="Chip.TCombobox", values=QUALITIES, width=14,
@@ -8504,7 +8958,7 @@ class DownloaderMixin:
 
 
     def _build_folder_row(self):
-        """Mappa: szerkeszthető lenyíló lista, beírható útvonal és a legutóbbi mappák."""
+        """Folder: editable combobox with a typed path and the recent folders."""
         _, line = self._option_row(5, t("Letöltési mappa"))
         secondary_button(line, t("Tallózás…"), self.choose_folder, width=100, height=28,
                     font=(FONT_FAMILY, 12)).pack(side="right", padx=(8, 0))
@@ -8514,7 +8968,7 @@ class DownloaderMixin:
         self.folder_combo.pack(side="right", fill="x", expand=True, padx=(16, 0))
         add_context_menu(self.folder_combo)
 
-    # ---------- segédek ----------
+    # ---------- Helpers ----------
     def _extra_opts(self):
         opts = {}
         name = self.browser.get()
@@ -8525,7 +8979,7 @@ class DownloaderMixin:
         return opts
 
     def _recent_values(self):
-        """A lenyílóban csak a most is létező mappák látszanak. Zárolt előzményeknél egy sem."""
+        """Only folders that still exist are listed. None while the history is locked."""
         if self.hist_locked:
             return []
         return [f for f in self.recent_folders if os.path.isdir(f)]
@@ -8558,7 +9012,7 @@ class DownloaderMixin:
             self.dl_btn.set_state("normal" if self.res_box["values"] else "disabled")
 
     def _thumb_image(self, data, size=(168, 94), bg=None):
-        """Lekerekített, a kártya színére illesztett bélyegkép (PIL kép) vagy None."""
+        """Rounded thumbnail matched to the card colour (PIL image), or None."""
         if not (HAS_PIL and data):
             return None
         try:
@@ -8582,7 +9036,7 @@ class DownloaderMixin:
         except Exception:
             return None
 
-    # ---------- videó adatainak lekérése ----------
+    # ---------- Fetching video info ----------
     def _is_audio(self):
         return self.resolution.get() == AUDIO_LABEL
 
@@ -8599,18 +9053,22 @@ class DownloaderMixin:
     def _hdr_available(self):
         return hdr_heights(self.info_data or {})
 
+    def _hdr_here(self):
+        """Whether the selected resolution has an HDR variant (another resolution having one is
+        not enough)."""
+        return not self._is_audio() and self._selected_height() in self._hdr_available()
+
     def _hdr_wanted(self):
-        return bool(self.hdr.get()) and not self._is_audio() and bool(self._hdr_available())
+        return bool(self.hdr.get()) and self._hdr_here()
 
     def _update_audio_ui(self):
-        """A hangminőség menü csak a "Csak audio" választásakor látszik,
-        a HDR négyzet csak ha van HDR változat és nem hangot töltünk."""
+        """The audio quality menu only shows for "Audio only", the HDR checkbox only when there
+        is an HDR variant and the download is not audio."""
         if self._is_audio():
             self.quality_row.grid()
         else:
             self.quality_row.grid_remove()
-        self._hdr_show = bool(self.info_data) and not self._is_audio() \
-            and not self._is_live() and bool(self._hdr_available())
+        self._hdr_show = bool(self.info_data) and not self._is_live() and self._hdr_here()
         self._place_hdr()
         info = self.info_data or {}
         live = self._is_live()
@@ -8631,7 +9089,8 @@ class DownloaderMixin:
             self.dl_btn.set_text(t("●  Felvétel indítása") if live else t("\u2193  Letöltés"))
 
     def _place_hdr(self):
-        """A HDR négyzet a felbontás mellett áll, ha belefér, különben alatta külön sorban."""
+        """The HDR checkbox sits next to the resolution if it fits, otherwise on its own row
+        below."""
         check, line = self.hdr_check, self.hdr_row_parent
         if not getattr(self, "_hdr_show", False):
             check.pack_forget()
@@ -8655,10 +9114,11 @@ class DownloaderMixin:
         self._update_audio_ui()
         self._refresh_details()
 
-    RES_SEG_MAX = 6  # ennyi felbontás fér el a kapszulán, a többi a "Más" menübe kerül
+    RES_SEG_MAX = 6  # this many resolutions fit on the segmented control, the rest go to the "More" menu
 
     def _set_res_values(self, values, state="readonly"):
-        """A felbontások listája: a lenyíló (adat) és a kapszula (felület) együtt frissül."""
+        """The list of resolutions: the combobox (data) and the segmented control (UI) are
+        updated together."""
         self.res_box.configure(state=state, values=values)
         self._build_res_seg(list(values) if state != "disabled" else [])
 
@@ -8694,7 +9154,7 @@ class DownloaderMixin:
                               self.res_seg.winfo_rooty() + self.res_seg.winfo_height())
             finally:
                 menu.grab_release()
-            self._res_seg_select()  # ha nem választott, maradjon a korábbi
+            self._res_seg_select()  # if nothing was picked, keep the previous one
             return
         self._pick_res(value)
 
@@ -8703,7 +9163,8 @@ class DownloaderMixin:
         self._on_resolution_change()
 
     def _res_seg_select(self):
-        """A kapszula a mostani felbontást mutatja (a "Más" elemen a kiválasztott értékkel)."""
+        """The segmented control shows the current resolution (on the "More" item with the
+        chosen value)."""
         seg = getattr(self, "res_seg", None)
         if seg is None:
             return
@@ -8771,7 +9232,7 @@ class DownloaderMixin:
     def _set_ready_status(self):
         ext = ".mp3" if self._is_audio() else (".mkv" if self._hdr_wanted() else ".mp4")
         name = self._ready_basename() + ext
-        # a régi, egy szövegben levő változat is megmarad (más részek és tesztek olvassák)
+        # the old single-text status is kept too (other parts and tests read it)
         self.status.set(t('Mentés ezen a néven: {name}\nVálassz felbontást, majd nyomd meg a Letöltés gombot.').format(name=name))
         box = getattr(self, "ready_box", None)
         if box is not None:
@@ -8789,8 +9250,8 @@ class DownloaderMixin:
                 self._set_ready_status()
 
     def _paste_url(self, _event=None):
-        """Beillesztés: ha több link van a vágólapon (soronként egy), mind a mezőbe kerül,
-        szóközzel elválasztva. Egy soros mezőbe az újsor amúgy sem férne bele."""
+        """Paste: if the clipboard has several links (one per line), all go into the field
+        separated by spaces. A newline would not fit into a single-line field anyway."""
         widget = self._url_box.widget
         try:
             text = self.root.clipboard_get()
@@ -8810,7 +9271,8 @@ class DownloaderMixin:
         return "break"
 
     def _downloaded_before(self, url):
-        """A korábbi letöltés (előzmény) ehhez a linkhez. Zárolt vagy kikapcsolt előzménynél nincs."""
+        """The earlier download (history entry) of this link. None while the history is locked
+        or turned off."""
         if self.hist_locked or history_cap(self.history_limit) == 0:
             return None
         return find_downloaded(self.history, url, self._missing)
@@ -8821,7 +9283,7 @@ class DownloaderMixin:
                             t('Ezt a linket már letöltötted ({when}):\n\n{x}\n\nLetöltöd még egyszer?').format(when=when, x=entry['name']), yes_text=t("Letöltöm újra"), no_text=t("Mégsem"))
 
     def _fetch_multi(self, links):
-        """Több beillesztett link: a lejátszási lista ablakában kiválasztható, majd mind a sorba kerül."""
+        """Several pasted links: pick them in the playlist window, then all go to the queue."""
         folder = self.folder.get().strip()
         if not os.path.isdir(folder):
             show_dialog(self.root, "warning", t("A kiválasztott mappa nem létezik."))
@@ -8841,7 +9303,7 @@ class DownloaderMixin:
         res_values = ["1080p", "720p", "480p", "360p", AUDIO_LABEL]
         default = self.resolution.get() if self.resolution.get() in res_values else "1080p"
         result = ask_playlist(self.root, t("Beillesztett linkek"), entries, False, res_values,
-                              default)
+                              default, self._playlist_sb_label())
         if result:
             self._queue_playlist(*result)
         else:
@@ -8898,7 +9360,7 @@ class DownloaderMixin:
                 if info is not None and (info.get("_type") == "playlist" or (
                         info.get("entries") is not None and not info.get("formats"))):
                     entries = collect_playlist_entries(info)
-                    if not entries:  # csatorna főoldal: a Videók fület nézzük meg
+                    if not entries:  # channel home page: look at the Videos tab
                         tab = find_videos_tab(info)
                         if tab:
                             info = ydl.extract_info(tab, download=False)
@@ -8906,7 +9368,7 @@ class DownloaderMixin:
                     self._post(self._fetch_playlist_done, fid, info, entries)
                     return
                 if info is None or not video_heights(info)[0]:
-                    # a yt-dlp nem talált rendes videót: megnézzük az oldal kódját
+                    # yt-dlp found no proper video: look through the page source
                     self._post(self._fetch_progress, fid, 93, t("Videó keresése az oldalon"))
                     better = self._sniff_best(ydl, url, opts, info, cancel)
                     if better is not None:
@@ -8925,11 +9387,11 @@ class DownloaderMixin:
         except Exception as e:
             if cancel.is_set():
                 return
-            self.root.after(0, self._fetch_error, fid, str(e))
+            self._post(self._fetch_error, fid, str(e))
 
     def _sniff_best(self, ydl, page_url, base_opts, orig_info, cancel):
-        """Ha a yt-dlp nem ismeri az oldalt, megkeressük benne a valódi videólinket.
-        A legjobb (legmagasabb felbontású, leghosszabb) találatot adja, vagy None-t."""
+        """If yt-dlp does not know the site, finds the real video link in the page. Returns the
+        best match (highest resolution, longest), or None."""
         def fetch(u, referer):
             headers = {"Referer": referer} if referer else {}
             try:
@@ -8970,10 +9432,10 @@ class DownloaderMixin:
                 cinfo[key] = orig_info[key]
         if not cinfo.get("title") or str(cinfo["title"]).lower().endswith((".m3u8", ".mp4")):
             cinfo["title"] = page_title_from_url(page_url)
-        cinfo["_phdl_media_url"] = cand
+        cinfo["_vr_media_url"] = cand
         return cinfo
 
-    # ---------- az adatlekérés haladásjelzője ----------
+    # ---------- Fetch progress indicator ----------
     def _start_fetch_ui(self, fid):
         self._fetch_pct = 2.0
         self._fetch_stage = t("Indul")
@@ -9009,7 +9471,7 @@ class DownloaderMixin:
         self._show_fetch_status()
 
     def _fetch_tick(self, fid):
-        """Lassan akkor is mozdul a sáv, ha az oldal nem szól semmit, így látszik, hogy él."""
+        """The bar moves slowly even when the site says nothing, to show it is alive."""
         if fid != self._fetch_id or self._phase != "fetch":
             return
         if self._fetch_pct < FETCH_CAP:
@@ -9019,7 +9481,7 @@ class DownloaderMixin:
         self.root.after(500, self._fetch_tick, fid)
 
     def _fetch_done(self, fid, url, info, thumb_bytes):
-        if fid != self._fetch_id:  # közben megszakítottuk, az eredményt eldobjuk
+        if fid != self._fetch_id:  # cancelled in the meantime: drop the result
             return
         heights, has_video = video_heights(info)
         if not heights and not has_video and not (info.get("formats") or []):
@@ -9033,9 +9495,9 @@ class DownloaderMixin:
         self.hdr.set(False)
         self._setup_extras()
 
-        # a videós felbontások után a "Csak audio" lehetőség jön
+        # "Audio only" comes after the video resolutions
         values = [f"{h}p" for h in heights]
-        if not heights and has_video:  # a videó megvan, csak a felbontását nem ismerjük
+        if not heights and has_video:  # there is a video, only its resolution is unknown
             values.append(BEST_LABEL)
         values.append(AUDIO_LABEL)
         self._set_res_values(values)
@@ -9052,7 +9514,7 @@ class DownloaderMixin:
         self._set_ready_status()
 
     def _fetch_playlist_done(self, fid, info, entries):
-        """Lejátszási lista vagy csatorna: kiválasztó ablak, majd sorba állítás."""
+        """Playlist or channel: picker window, then queueing."""
         if fid != self._fetch_id:
             return
         self._phase = None
@@ -9071,13 +9533,23 @@ class DownloaderMixin:
         res_values = ["1080p", "720p", "480p", "360p", AUDIO_LABEL]
         default = self.resolution.get() if self.resolution.get() in res_values else "1080p"
         result = ask_playlist(self.root, info.get("title") or t("Lejátszási lista"), entries,
-                              len(entries) >= PLAYLIST_MAX, res_values, default)
+                              len(entries) >= PLAYLIST_MAX, res_values, default,
+                              self._playlist_sb_label())
         if result:
             self._queue_playlist(*result)
         else:
             self.set_status(t("A lejátszási lista letöltését elvetted."))
 
-    def _queue_playlist(self, entries, label):
+    def _playlist_sb_label(self):
+        """Label of the SponsorBlock checkbox in the playlist picker, or None if no category is
+        selected."""
+        if not self.sb_categories:
+            return None
+        return t("Jelölt részek fejezetként") if self.sb_mode == "mark" \
+            else t("Jelölt részek kivágása")
+
+    def _queue_playlist(self, entries, label, extras=None):
+        extras = extras or {}
         folder = self.folder.get().strip()
         audio = label == AUDIO_LABEL
         digits = label.replace("p", "")
@@ -9101,6 +9573,10 @@ class DownloaderMixin:
             job.title = e.get("title") or ""
             job.lazy = True
             job.embed_meta = self.embed_metadata
+            if not audio and extras.get("sub") in ("orig", "hu", "en"):
+                job.sub_pref = extras["sub"]  # the exact subtitle is chosen when the download starts
+            if extras.get("sponsorblock") and self.sb_categories and is_youtube_url(e["url"]):
+                job.sponsorblock = (self.sb_mode, list(self.sb_categories))
             self.jobs.append(job)
             self._build_job_row(job)
             added += 1
@@ -9112,7 +9588,7 @@ class DownloaderMixin:
         self._refresh_queue_summary(announce=True)
 
     def _resolve_lazy(self, job):
-        """Lejátszási listás videó: indításkor kérjük le a pontos címet, dátumot és bélyegképet."""
+        """Playlist item: fetches the exact title, date and thumbnail when it starts."""
         job.text = t("Adatok lekérése...")
         self._post(self._update_job_ui, job)
         opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
@@ -9126,12 +9602,15 @@ class DownloaderMixin:
                     thumb = ydl.urlopen(info["thumbnail"]).read()
                 except Exception:
                     thumb = None
-        job.basename = build_basename(info, job.height)
+        job.basename = unique_basename(job.folder, build_basename(info, job.height), job.ext,
+                                       self._taken_names(job.folder, skip=job))
         job.uploader = info.get("uploader") or info.get("channel") or job.uploader
         job.title = info.get("title") or job.title
         job.upload_date = str(info.get("upload_date") or "")
         job.duration = info.get("duration") if not job.clip else job.clip[1] - job.clip[0]
         job.thumb = thumb
+        if getattr(job, "sub_pref", None) and not job.audio:
+            job.sub = pick_subtitle(info, job.sub_pref)
         job.lazy = False
         self._post(self._refresh_job_head, job)
 
@@ -9159,7 +9638,7 @@ class DownloaderMixin:
                           self.fetch_info)
 
     def _offer_retry(self, headline, text, retry_ok, action):
-        """Hiba után megkérdezi, hogy újrapróbálja-e. Magától sosem próbálkozik újra."""
+        """After an error asks whether to retry. Never retries by itself."""
         if retry_ok:
             if show_confirm(self.root, t("Újrapróbálkozás"),
                             t('{headline}\n\n{text}\n\nÚjrapróbáljam?').format(headline=headline, text=text)):
@@ -9167,7 +9646,7 @@ class DownloaderMixin:
         else:
             show_dialog(self.root, "error", f"{headline}\n\n{text}")
 
-    # ---------- elakadt lekérés figyelése ----------
+    # ---------- Watching for a stalled fetch ----------
     def _arm_stall_timer(self, fid, seconds):
         self._cancel_stall_timer()
         self._stall_job = self.root.after(int(seconds * 1000), self._on_fetch_stall, fid)
@@ -9194,7 +9673,7 @@ class DownloaderMixin:
                    + t("\n\nMegszakítsam, és újrapróbáljam?"))
         retry = show_confirm(self.root, t("A lekérés elakadt"), message)
         if fid != self._fetch_id or self._phase != "fetch":
-            return  # közben befejeződött
+            return  # finished in the meantime
         if retry:
             self._cancel_fetch()
             self.fetch_info()
@@ -9202,8 +9681,8 @@ class DownloaderMixin:
             self._arm_stall_timer(fid, FETCH_STALL_SECONDS)
 
     def _cancel_fetch(self):
-        """A lekérést nem lehet erőszakkal leállítani, ezért a felület azonnal
-        felszabadul, a háttérben futó lekérés eredményét pedig eldobjuk."""
+        """A fetch cannot be killed, so the UI is freed immediately and the result of the
+        background fetch is dropped."""
         self._fetch_id += 1
         self._fetch_cancel.set()
         self._phase = None
@@ -9213,7 +9692,7 @@ class DownloaderMixin:
         self.set_status(t("Az adatok lekérését megszakítottam."))
 
     def _reset_form(self):
-        """Letöltés indítása után a felület készen áll a következő linkre."""
+        """After starting a download the form is ready for the next link."""
         self.url.set("")
         self._set_res_values([], state="disabled")
         self.resolution.set("")
@@ -9228,12 +9707,12 @@ class DownloaderMixin:
 
 
 class ExtrasMixin:
-    """A letöltés kiegészítői: kijelölt rész, feliratok, élő adás felvétele, SponsorBlock és
-    az adatok beégetése a fájlba (a letöltő oldal sorai és a hozzájuk tartozó letöltési rész)."""
+    """Download extras: selected part, subtitles, live recording, SponsorBlock and embedded
+    metadata (the downloader page rows and the matching download options)."""
 
-    # ---------- közös ----------
+    # ---------- Common ----------
     def _setup_extras(self):
-        """Új videó adatainál: teljes videó, a feliratlista a videó feliratai alapján."""
+        """For new video info: full video, subtitle list from the video's subtitles."""
         info = self.info_data or {}
         dur = info.get("duration")
         self.clip_ctl.set_value("full")
@@ -9268,9 +9747,9 @@ class ExtrasMixin:
             return None
         return self._sub_keys.get(self.sub_var.get())
 
-    # ---------- kijelölt rész ----------
+    # ---------- Selected part ----------
     def _build_clip_row(self):
-        # kijelölt rész: alapból a teljes videó, átkapcsolva kezdő és záró időpont
+        # selected part: the full video by default, when switched on a start and end time
         self.clip_row, line = self._option_row(2, t("Letöltendő rész"))
         self.clip_ctl = SegmentedControl(line, [("full", t("Teljes videó")),
                                                 ("part", t("Kijelölt rész"))],
@@ -9311,7 +9790,7 @@ class ExtrasMixin:
         self._update_sb_row()
 
     def _clip_range(self):
-        """(kezdet, vége, hibaüzenet). Teljes videónál (None, None, None)."""
+        """(start, end, error message). (None, None, None) for the full video."""
         if getattr(self, "_clip_mode", "full") != "part":
             return None, None, None
         dur = int((self.info_data or {}).get("duration") or 0)
@@ -9336,9 +9815,9 @@ class ExtrasMixin:
                                          fg=GREY)
         self._refresh_details()
 
-    # ---------- feliratok ----------
+    # ---------- Subtitles ----------
     def _build_subtitle_row(self):
-        # feliratok: csak akkor látszik, ha a videónak van felirata
+        # subtitles: only shown if the video has any
         self.sub_row, line = self._option_row(3, t("Feliratok letöltése"))
         self.sub_var = tk.StringVar(value=NO_SUB_LABEL)
         self.sub_combo = ttk.Combobox(line, textvariable=self.sub_var, state="readonly",
@@ -9347,14 +9826,14 @@ class ExtrasMixin:
         self.sub_combo.pack(side="right")
         self._sub_keys = {}
 
-    # ---------- élő adás felvétele ----------
+    # ---------- Live recording ----------
     def _build_live_row(self):
-        # élő adás: a "Letöltendő rész" helyén (élő adásnak nincs ismert hossza)
+        # live stream: in place of "Part to download" (a live stream has no known length)
         self.live_row, line = self._option_row(2, t("Élő adás"))
         self.live_badge = tk.Label(line, text=" ● " + t("ÉLŐ") + " ", bg=DANGER, fg="#ffffff",
                                    font=(FONT_FAMILY, 11, "bold"))
         self.live_badge.pack(side="left", padx=(10, 0))
-        # a fehér betű nem szerepszín: témaváltás után is fehér maradjon
+        # the white text is not a role colour: keep it white after theme changes
         self.live_badge._retheme = lambda b=self.live_badge: b.configure(bg=DANGER, fg="#ffffff")
         self.live_from_start = tk.BooleanVar(value=False)
         self.live_check = make_check(line, t("Felvétel az adás elejétől"), self.live_from_start,
@@ -9376,19 +9855,19 @@ class ExtrasMixin:
         self.live_note.configure(text=text)
 
     def _stop_live(self, job):
-        """Leállítás és mentés: a felvett rész megmarad, utána a szokásos feldolgozás jön."""
+        """Stop and save: the recorded part is kept and processed as usual."""
         if not job.live or job.state != "active" or job.stop_event.is_set() \
                 or job.cancel_event.is_set() or not job.can_cancel:
             return
         procs = live_procs(job.thread_id) if job.thread_id else []
         if not procs and not job.live_from_start:
-            # a felvétel még el sem indult (az adatok lekérése tart): nincs mit menteni
+            # recording has not started yet (info is still being fetched): nothing to save
             self._cancel_job(job)
             return
         job.stop_event.set()
         job.text = t("A felvétel mentése...")
         for proc in procs:
-            # az ffmpeg a "q" betűre rendesen lezárja a fájlt
+            # ffmpeg closes the file properly on "q"
             try:
                 proc.stdin.write(b"q")
                 proc.stdin.flush()
@@ -9400,7 +9879,7 @@ class ExtrasMixin:
         self._update_job_ui(job)
 
     def _live_tick(self, job, tick_id=None):
-        """Felvétel közben másodpercenként: eltelt idő és a fájlok mérete."""
+        """Every second while recording: elapsed time and file size."""
         if not job.live or job.state != "active" or job.cancel_event.is_set() \
                 or tick_id != getattr(job, "tick_id", None):
             return
@@ -9425,9 +9904,9 @@ class ExtrasMixin:
         except Exception:
             pass
 
-    # ---------- SponsorBlock és adatok a fájlba ----------
+    # ---------- SponsorBlock and metadata ----------
     def _build_sponsorblock_row(self):
-        # SponsorBlock: csak YouTube videónál, ha a videóban vannak jelölt részek
+        # SponsorBlock: only for YouTube videos that have marked segments
         self.sb_row, line = self._option_row(4, t("SponsorBlock"))
         self.sb_var = tk.BooleanVar(value=False)
         self.sb_check = make_check(line, "", self.sb_var, self._refresh_details)
@@ -9441,7 +9920,7 @@ class ExtrasMixin:
 
     def _sb_loaded(self, video_id, segments):
         if video_id != self._sb_video:
-            return  # közben másik videót kértél le
+            return  # another video was fetched meanwhile
         self._sb_segments = segments
         self._update_sb_row()
 
@@ -9449,8 +9928,8 @@ class ExtrasMixin:
         return sponsor_summary(self._sb_segments, self.sb_categories)
 
     def _update_sb_row(self):
-        """A SponsorBlock sor csak akkor látszik, ha a választott kategóriákban van jelölt
-        rész, és nem kijelölt részt vagy élő adást töltesz."""
+        """The SponsorBlock row only shows when the chosen categories have segments and the
+        download is not a selected part or a live stream."""
         if not hasattr(self, "sb_row"):
             return
         n, total = self._sb_counts()
@@ -9473,8 +9952,8 @@ class ExtrasMixin:
 
     @staticmethod
     def _add_meta_opts(job, opts):
-        """Adatok a fájlba és a SponsorBlock, a yt-dlp parancssorával azonos sorrendben:
-        SponsorBlock lekérés, ..., ModifyChapters, FFmpegMetadata, EmbedThumbnail."""
+        """Metadata and SponsorBlock postprocessors, in the same order as the yt-dlp command
+        line: SponsorBlock fetch, ..., ModifyChapters, FFmpegMetadata, EmbedThumbnail."""
         pps = opts.setdefault("postprocessors", [])
         sb = job.sponsorblock
         if sb:
@@ -9488,7 +9967,7 @@ class ExtrasMixin:
                             "should_stop": job.cancel_event.is_set,
                             "on_fallback": lambda why: setattr(job, "fade_failed", why)})
             else:
-                # HDR videónál az áttűnés helyett is sima vágás (lásd sponsor_fade_cut)
+                # plain cut instead of fades for HDR video (see sponsor_fade_cut)
                 mode = "remove" if mode == "fade" else mode
                 pps.append({"key": "ModifyChapters", "remove_chapters_patterns": [],
                             "remove_sponsor_segments": set(cats) if mode == "remove" else set(),
@@ -9508,11 +9987,11 @@ class ExtrasMixin:
 
 
 class QueueMixin:
-    """A letöltési sor és a futó letöltések kártyái (az Előzmények oldal tetején)."""
+    """The download queue and the cards of running downloads (top of the history page)."""
 
-    # ---------- letöltések: sor, párhuzamos futás ----------
+    # ---------- Downloads: queue, parallel runs ----------
     def start_download(self):
-        """A kiválasztott videót a letöltések sorába teszi. Egyszerre MAX_PARALLEL fut."""
+        """Adds the selected video to the queue. MAX_PARALLEL run at once."""
         url = self.url.get().strip()
         folder = self.folder.get().strip()
         audio = self._is_audio()
@@ -9553,10 +10032,12 @@ class QueueMixin:
                 t("Az ffmpeg nincs telepítve, ezért nem biztos, hogy mp4 lesz belőle.\n")
                 + ffmpeg_hint())
 
+        ext = ".mp3" if audio else (".mkv" if hdr else ".mp4")
+        basename = unique_basename(folder, basename, ext, self._taken_names(folder))
         uploader = (self.info_data.get("uploader") or self.info_data.get("channel") or "")
-        media = self.info_data.get("_phdl_media_url")
+        media = self.info_data.get("_vr_media_url")
         extra = self._extra_opts()
-        if media:  # az oldalból kikeresett videólink: az oldal a Referer
+        if media:  # video link found in the page: the page is the Referer
             extra = dict(extra)
             extra["http_headers"] = {**(extra.get("http_headers") or {}), "Referer": url}
         job = DownloadJob(media or url, height, folder, basename, audio, self._selected_kbps(),
@@ -9582,6 +10063,11 @@ class QueueMixin:
         self._add_job(job)
         self._fly_thumbnail(fly_data, fly_src)
 
+    def _taken_names(self, folder, skip=None):
+        """File names of the downloads currently writing to (or waiting for) this folder."""
+        return {j.basename for j in list(self.jobs)
+                if j is not skip and j.unfinished and j.folder == folder}
+
     def _add_job(self, job):
         self.jobs.append(job)
         self._build_job_row(job)
@@ -9592,7 +10078,7 @@ class QueueMixin:
         return [j for j in self.jobs if j.state == "active"]
 
     def _pump(self):
-        """Elindítja a várakozó letöltéseket, amíg van szabad hely."""
+        """Starts waiting downloads while there are free slots."""
         running = len(self._active_jobs())
         for job in self.jobs:
             if self.max_parallel and running >= self.max_parallel:
@@ -9607,7 +10093,7 @@ class QueueMixin:
         if job.live:
             job.live_started = time.monotonic()
             job.stop_event = threading.Event()
-            job.tick_id = getattr(job, "tick_id", 0) + 1  # a régi számláló leáll
+            job.tick_id = getattr(job, "tick_id", 0) + 1  # the old ticker stops
             self.root.after(1000, self._live_tick, job, job.tick_id)
         elif job.clip:
             job.tick_id = getattr(job, "tick_id", 0) + 1
@@ -9617,8 +10103,8 @@ class QueueMixin:
         threading.Thread(target=self._run_job, args=(job,), daemon=True).start()
 
     def _clip_tick(self, job, tick_id):
-        """Kijelölt rész letöltésekor az ffmpeg nem küld haladást a yt-dlp-n át, ezért a
-        -progress fájlból olvassuk ki másodpercenként."""
+        """When downloading a selected part ffmpeg reports no progress through yt-dlp, so it is
+        read from the -progress file every second."""
         if job.state != "active" or job.cancel_event.is_set() or not job.can_cancel \
                 or tick_id != getattr(job, "tick_id", None):
             return
@@ -9638,15 +10124,15 @@ class QueueMixin:
             pass
 
     def _post(self, func, *args):
-        """Szálból biztonságosan szól a felületnek."""
+        """Safely calls into the UI from a thread."""
         try:
             self.root.after(0, func, *args)
         except Exception:
             pass
 
     def _run_job(self, job):
-        """A letöltés szála. Bármilyen váratlan hiba esetén is lezárja a letöltést (hiba vagy
-        megszakítva), hogy ne maradjon örökre "Indul..." állapotban, foglalva a helyet."""
+        """The download thread. Always finishes the download (error or cancelled) on any
+        unexpected error, so it never stays "Starting..." forever holding a slot."""
         try:
             self._run_job_inner(job)
         except Exception as e:
@@ -9657,6 +10143,7 @@ class QueueMixin:
                 self._post(self._job_error, job, str(e))
 
     def _run_job_inner(self, job):
+        job.run_started = time.time()
         if job.lazy:
             try:
                 self._resolve_lazy(job)
@@ -9666,13 +10153,13 @@ class QueueMixin:
                 else:
                     self._post(self._job_error, job, str(e))
                 return
-        # a % jelet duplázni kell, különben a yt-dlp sablonként értelmezné
-        # Ideiglenes fájlok a gép helyi lemezén: a célmappába (pl. NAS) csak a kész videó
-        # kerül át, így a hálózati tár naplóját nem töltik meg a köztes módosítások.
+        # % must be doubled, otherwise yt-dlp treats it as a template.
+        # Temporary files go to the local disk: only the finished video is moved to the target
+        # folder (e.g. a NAS), so intermediate writes do not fill the network storage's log.
         tmp_dir = make_job_temp(self.temp_dir) if self.temp_local else None
         job.thread_id = threading.get_ident()
         job.work_dir = tmp_dir or job.folder
-        install_live_tracking()  # a megszakítás és a kilépés leállíthatja az ffmpeg-et
+        install_live_tracking()  # so cancelling and quitting can stop ffmpeg
         name_tmpl = job.basename.replace("%", "%%") + ".%(ext)s"
         outtmpl = name_tmpl if tmp_dir else os.path.join(job.folder, name_tmpl)
         opts = {
@@ -9682,7 +10169,7 @@ class QueueMixin:
             "no_warnings": True,
             "noprogress": True,
             "progress_hooks": [lambda d: self._job_hook(job, d)],
-            "_vr_job": job,  # a sebességkorláthoz (install_speed_limit)
+            "_vr_job": job,  # for the speed limit (install_speed_limit)
         }
         if job.audio:
             opts["format"] = "bestaudio/best"
@@ -9692,20 +10179,20 @@ class QueueMixin:
         else:
             h = job.height
             if job.hdr:
-                # a HDR videó VP9.2/AV1, ez mp4-ben sok lejátszón nem megy: mkv a tároló
+                # HDR video is VP9.2/AV1, which many players cannot play in mp4: use mkv
                 opts["format"] = hdr_format_selector(h)
                 opts["merge_output_format"] = "mkv"
             else:
                 if h:
                     opts["format"] = (f"bv*[height<=?{h}][ext=mp4]+ba[ext=m4a]"
                                       f"/bv*[height<=?{h}]+ba/b[height<=?{h}]/b")
-                else:  # ismeretlen felbontás: a legjobbat kérjük
+                else:  # unknown resolution: ask for the best
                     opts["format"] = "bv*+ba/b"
                 opts["merge_output_format"] = "mp4"
                 opts["postprocessors"] = [{"key": "FFmpegVideoRemuxer",
                                            "preferedformat": "mp4"}]
         if job.clip:
-            # csak a kijelölt rész: a vágásnál új kulcskép kerül a pontos időpontra
+            # selected part only: a new keyframe is placed at the exact cut
             opts["download_ranges"] = yt_dlp.utils.download_range_func(None, [job.clip])
             job.progress_file = os.path.join(tempfile.gettempdir(),
                                              f"vr-clip-{os.getpid()}-{job.id}.txt")
@@ -9716,11 +10203,11 @@ class QueueMixin:
                 opts["force_keyframes_at_cuts"] = True
                 opts["external_downloader_args"] = {"ffmpeg_o": enc}
             else:
-                # HDR vagy nincs gyors kódoló: újrakódolás nélkül, a legközelebbi kulcsképnél vág
+                # HDR or no fast encoder: cut at the nearest keyframe without re-encoding
                 opts["external_downloader_args"] = {"ffmpeg_o": ["-progress", job.progress_file]}
         if job.sub:
-            # a felirat külön .srt fájl a videó mellett, azonos névvel: a lejátszók
-            # (az mpv is) maguktól betöltik
+            # the subtitle is a separate .srt next to the video with the same name: players (mpv
+            # too) load it automatically
             auto = job.sub.startswith("auto:")
             opts["writesubtitles"] = not auto
             opts["writeautomaticsub"] = auto
@@ -9731,7 +10218,8 @@ class QueueMixin:
         if job.live and job.live_from_start:
             opts["live_from_start"] = True
         job.fade_progress = lambda pct: self._post(
-            self._job_processing, job, t("Áttűnések készítése: {pct}%").format(pct=int(pct)), pct)
+            self._job_processing, job, t("Áttűnések készítése: {pct}%").format(pct=int(pct)), pct,
+            True)
         self._add_meta_opts(job, opts)
         if tmp_dir:
             opts["paths"] = {"home": job.folder, "temp": tmp_dir}
@@ -9742,7 +10230,8 @@ class QueueMixin:
             try:
                 self._download_with_sub_retry(job, opts)
             except KeyboardInterrupt:
-                # élő adás leállítása, ha a yt-dlp nem kezelte: ha a felvett rész megvan, kész
+                # stopping a live stream that yt-dlp did not handle: done if the recorded part
+                # exists
                 path = find_output_file(job.folder, job.basename, job.ext)
                 if job.cancel_event.is_set() or not job.stop_event.is_set() \
                         or not os.path.exists(path):
@@ -9753,6 +10242,7 @@ class QueueMixin:
                 removed = delete_partial_files(job.folder, job.basename)
                 if job.sub:
                     removed += delete_subtitle_files(job.folder, job.basename)
+                removed += delete_new_output(job)
                 self._post(self._job_cancelled, job, removed)
             else:
                 self._post(self._job_error, job, str(e))
@@ -9769,7 +10259,7 @@ class QueueMixin:
         try:
             self._download_with_thumb_retry(job, opts)
         except Exception as e:
-            # ha csak a felirat nem jött le, a videó attól még kell: újra, felirat nélkül
+            # if only the subtitle failed, the video is still wanted: retry without subtitles
             if not job.sub or job.cancel_event.is_set() or "subtitle" not in str(e).lower():
                 raise
             job.sub_failed = True
@@ -9781,8 +10271,8 @@ class QueueMixin:
 
     @staticmethod
     def _download_with_thumb_retry(job, opts):
-        """Ha a borítókép nem tölthető le (hibás vagy furcsa képlink), a yt-dlp az egész
-        letöltést elbuktatja. Ilyenkor borító nélkül még egyszer."""
+        """If the thumbnail cannot be downloaded (broken or odd image link), yt-dlp fails the
+        whole download. Then try once more without the cover."""
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([job.url])
@@ -9803,11 +10293,11 @@ class QueueMixin:
             raise DownloadCancelled()
         if job.live:
             if d["status"] == "downloading":
-                # az adás elejétől: a darabonként letöltő yt-dlp erre befejezi, és a felvett
-                # részt összefűzi (élő adásnál ez a "leállítás és mentés")
+                # from the start: the fragment downloader stops on this and merges what was
+                # recorded (this is "stop and save" for live streams)
                 if job.stop_event.is_set():
                     raise KeyboardInterrupt
-                return  # a felvett időt és méretet a _live_tick írja ki
+                return  # _live_tick shows the recorded time and size
             if d["status"] == "finished":
                 self._post(self._job_processing, job, t("A felvétel mentése..."))
             return
@@ -9821,19 +10311,20 @@ class QueueMixin:
                 pct = None
             now = time.monotonic()
             if now - getattr(job, "_last_post", 0.0) < 0.25 and (pct or 0) < 100:
-                return  # legfeljebb ~4 frissítés másodpercenként
+                return  # at most ~4 updates per second
             job._last_post = now
             parts = []
             if pct is not None:
                 parts.append(f"{pct:.0f}%")
             if d.get("speed"):
-                parts.append(f"{d['speed'] / 1024 / 1024:.1f} MB/s")
+                # same MB as the speed limit (1 MB = 1,000,000 bytes)
+                parts.append(f"{d['speed'] / 1_000_000:.1f} MB/s")
             if d.get("eta") is not None:
                 parts.append(t('még {x} mp').format(x=int(d['eta'])))
             self._post(self._job_progress, job, pct,
                        "  ".join(parts) if parts else t("Letöltés..."))
         elif d["status"] == "finished":
-            # az összefűzést, átalakítást már nem lehet megszakítani
+            # merging and converting can no longer be cancelled
             what = t("mp3 átalakítás") if job.audio else t("mp4 összefűzés")
             self._post(self._job_processing, job, t('Feldolgozás ({what})...').format(what=what))
 
@@ -9845,10 +10336,12 @@ class QueueMixin:
         job.text = text
         self._update_job_ui(job)
 
-    def _job_processing(self, job, text, pct=100):
+    def _job_processing(self, job, text, pct=100, cancellable=False):
+        """Post-processing. Most steps are short and cannot be stopped safely, but building
+        fades can take minutes, so that one can be cancelled."""
         if job.state != "active":
             return
-        job.can_cancel = False
+        job.can_cancel = cancellable and not job.cancel_event.is_set()
         job.pct = pct
         job.text = text
         self._update_job_ui(job)
@@ -9877,7 +10370,8 @@ class QueueMixin:
             entry["upload_date"] = job.upload_date
         if getattr(job, "duration", None):
             entry["duration"] = job.duration
-        self._add_history(entry, refresh=False)  # lent egyszer épül újra a lista
+        prev_history = self.history  # for the fast insert (_insert_hist_entry)
+        self._add_history(entry, refresh=False)  # the list is updated once below
         job.entry = entry
         job.state = "done"
         job.path = path
@@ -9886,20 +10380,22 @@ class QueueMixin:
         job.text = t("Kész, de a felirat nem jött le") if getattr(job, "sub_failed", False) \
             else t("Kész")
         if getattr(job, "fade_failed", None):
-            # a szponzor rész így is kimaradt, csak az áttűnés nem készült el
+            # the sponsor part was still removed, only the fades were not made
             job.text = t("Kész, áttűnés nélkül (sima vágás)")
         if job.live and job.live_started and not job.live_from_start:
             job.text = t("Kész: {x} felvétel").format(x=live_elapsed(job))
         self._batch_ok.append(job)
         if self.history and self.history[0] is entry:
-            # a kész videó az Előzmények kártyái közé kerül, "Kész, épp most" jelzéssel
+            # the finished video joins the history cards with a "Done, just now" badge
             self._fresh[(entry.get("path"), entry.get("date"))] = time.time()
             self._remove_job_row(job)
-            self._refresh_history_list(keep_page=True)
-            # ha épp látszik, az "Új" jelzés előtűnik; a háttérben elkészültnél nincs animáció
+            if not self._insert_hist_entry(prev_history):
+                self._refresh_history_list(keep_page=True)
+            # if visible, the "New" badge fades in; no animation for downloads finished in the
+            # background
             self.root.after(30, lambda: self._fade_in_status(0))
         else:
-            self._update_job_ui(job)  # előzmények nélkül a kártya marad (eltávolításig)
+            self._update_job_ui(job)  # without history the card stays (until removed)
             self._refresh_hist_subtitle()
         self._job_finished()
 
@@ -9911,7 +10407,7 @@ class QueueMixin:
         self._job_finished()
 
     def _job_error(self, job, msg):
-        """A hibás letöltés a listában marad, onnan újrapróbálható vagy törölhető."""
+        """A failed download stays in the list, where it can be retried or deleted."""
         text, retry_ok = explain_error(msg, self.browser.get())
         job.state = "error"
         job.can_cancel = False
@@ -9921,7 +10417,7 @@ class QueueMixin:
         self._batch_failed += 1
         self._update_job_ui(job)
         if self.notify_popup:
-            hide = self.hist_locked  # zárolt előzményeknél a cím és a kép sem látszik
+            hide = self.hist_locked  # with a locked history neither title nor image is shown
             self.toasts.show(APP_NAME if hide else job.title or job.name,
                              "" if hide else job.uploader or "", kind="error",
                              thumb=None if hide else job.thumb,
@@ -9947,7 +10443,7 @@ class QueueMixin:
         self._refresh_queue_summary()
 
     def _dismiss_job(self, job):
-        """A kész letöltés eltávolítása a listából (a fájl és az előzmény megmarad)."""
+        """Removes a finished download from the list (the file and the history entry stay)."""
         if job.state == "done":
             self._remove_job_row(job)
 
@@ -9976,7 +10472,7 @@ class QueueMixin:
             self._all_done()
 
     def _all_done(self):
-        """Értesítés és hang csak akkor, amikor az összes letöltés elkészült."""
+        """Notification and sound only when all downloads have finished."""
         ok, self._batch_ok = self._batch_ok, []
         failed, self._batch_failed = self._batch_failed, 0
         if not ok:
@@ -9995,7 +10491,7 @@ class QueueMixin:
             self.set_status(t('Kész, {n_ok} letöltés elkészült.').format(n_ok=len(ok)))
         if self.notify_sound:
             play_done_sound(self.root)
-        if self.notify_popup:  # értesítés a sarokban, nem kell OK-t nyomni
+        if self.notify_popup:  # notification in the corner, no OK button needed
             first = ok[0]
             if len(ok) == 1:
                 header = t("Kész a letöltés")
@@ -10006,7 +10502,7 @@ class QueueMixin:
             if failed:
                 header += t(', {failed} nem sikerült').format(failed=failed)
             entries = [j.entry for j in ok if getattr(j, "entry", None)]
-            hide = self.hist_locked  # zárolt előzményeknél a cím és a kép sem látszik
+            hide = self.hist_locked  # with a locked history neither title nor image is shown
             self.toasts.show(APP_NAME if hide else first.title or first.name,
                              "" if hide else sub, thumb=None if hide else first.thumb,
                              header=header, action=lambda: self._open_history_entries(entries))
@@ -10020,13 +10516,13 @@ class QueueMixin:
             job.cancel_event.set()
             job.text = t("Megszakítás...")
             if job.thread_id:
-                # az ffmpeg-gel töltött részeknél (élő adás, kijelölt rész) a yt-dlp nem
-                # figyeli a megszakítást, ezért az ffmpeg-et kell leállítani
+                # for parts downloaded with ffmpeg (live stream, selected part) yt-dlp does not
+                # watch for cancellation, so ffmpeg itself has to be stopped
                 kill_procs(live_procs(job.thread_id))
             self._update_job_ui(job)
 
     def cancel_action(self):
-        """A Megszakítás gomb a főképernyőn: az adatlekérést állítja le."""
+        """The Cancel button on the main page: stops fetching info."""
         if self._phase == "fetch":
             self._cancel_fetch()
 
@@ -10036,9 +10532,9 @@ class QueueMixin:
         except Exception:
             pass
 
-    # ---------- futó letöltések (az Előzmények oldal tetején) ----------
+    # ---------- Running downloads (top of the history page) ----------
     def _build_jobs_section(self, area):
-        """FOLYAMATBAN: a futó, várakozó és hibás letöltések kártyái."""
+        """IN PROGRESS: cards of the running, waiting and failed downloads."""
         self.jobs_section = tk.Frame(area, bg=BG)
         self.jobs_section.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         self.jobs_section.columnconfigure(0, weight=1)
@@ -10050,7 +10546,7 @@ class QueueMixin:
         self.dl_sub = tk.Label(head, text=self._parallel_text(), bg=BG, fg=GREY,
                                font=get_font(11), justify="right", anchor="e")
         self.dl_sub.grid(row=0, column=1, sticky="e", padx=(12, 4))
-        # keskeny ablaknál tördelődik, nem csúszik rá a FOLYAMATBAN feliratra
+        # wraps in a narrow window instead of overlapping the IN PROGRESS title
         head.bind("<Configure>", lambda e: self.dl_sub.configure(
             wraplength=max(120, e.width - 140)), add="+")
         self.dl_list = tk.Frame(self.jobs_section, bg=BG)
@@ -10058,7 +10554,7 @@ class QueueMixin:
         self.jobs_section.grid_remove()
 
     def _refresh_jobs_section(self):
-        """A FOLYAMATBAN rész csak akkor látszik, ha van benne kártya."""
+        """The IN PROGRESS section is only shown when it has cards."""
         self._update_nav_badges()
         self._refresh_hist_subtitle()
         try:
@@ -10097,7 +10593,7 @@ class QueueMixin:
         ui["name"].grid(row=0, column=0, sticky="w")
         btns = tk.Frame(top, bg=PANEL)
         btns.grid(row=0, column=1, padx=(10, 0), sticky="ne")
-        # a hosszú cím tördelődik, nem csúszik a gombok alá
+        # long titles wrap instead of sliding under the buttons
         top.bind("<Configure>", lambda e, lab=ui["name"], b=btns: lab.configure(
             wraplength=max(120, e.width - b.winfo_reqwidth() - 14)))
         small = (FONT_FAMILY, 12)
@@ -10128,7 +10624,7 @@ class QueueMixin:
         ui["status"].grid(row=3, column=0, sticky="w", pady=(6, 0))
         body.bind("<Configure>", lambda e, st=ui["status"]: st.configure(
             wraplength=max(120, e.width - 4)))
-        # dupla kattintás a kész letöltésen: Előzmények, kijelölve ez a videó
+        # double click on a finished download: history page with this video selected
         skip = {link} | {w for w in ui.values() if isinstance(w, RoundButton)}
 
         def bind_all_rows(widget):
@@ -10154,8 +10650,8 @@ class QueueMixin:
         if not ui:
             return
         img = self._make_thumbnail(job.thumb, (96, 54)) if job.thumb else None
-        ui["photo"] = img  # a képet tartani kell
-        if img is None:  # amíg nincs kép: üres helyőrző, hogy a kártyák egy vonalban legyenek
+        ui["photo"] = img  # keep a reference to the image
+        if img is None:  # no image yet: an empty placeholder so the cards line up
             if getattr(self, "_blank_img", None) is None:
                 self._blank_img = tk.PhotoImage(width=1, height=1)
             ui["thumb"].configure(image=self._blank_img, width=96, height=54, bg=CHIP)
@@ -10196,7 +10692,8 @@ class QueueMixin:
             pass
 
     def _tick_job_text(self, job):
-        """A százalék nem ugrik, hanem gyorsan felpörög az új értékig (pl. 41, 43, 45%)."""
+        """The percentage does not jump, it quickly counts up to the new value (e.g. 41, 43,
+        45%)."""
         ui = job.ui
         if not ui:
             return
@@ -10233,7 +10730,35 @@ class QueueMixin:
         self._refresh_jobs_section()
         self._refresh_queue_summary()
 
+    def _save_queue(self):
+        """Saves the waiting and running downloads (they continue at the next start)."""
+        if not getattr(self, "_queue_ready", False):
+            return  # not restored yet at startup: do not overwrite the saved queue
+        save_json(QUEUE_FILE, [d for d in (job_to_dict(j) for j in self.jobs) if d])
+
+    def _restore_queue(self):
+        """At startup: puts the downloads interrupted last time back in the queue."""
+        raw = load_json(QUEUE_FILE, [])
+        jobs = []
+        if isinstance(raw, list):
+            for data in raw[:MAX_JOBS]:
+                job = job_from_dict(data, self._extra_opts()) if isinstance(data, dict) else None
+                if job is not None:
+                    job.embed_meta = job.embed_meta and self.embed_metadata
+                    jobs.append(job)
+        self._queue_ready = True
+        for job in jobs:
+            self.jobs.append(job)
+            self._build_job_row(job)
+        if jobs:
+            self._pump()
+            self.toasts.show(t("{n} letöltés folytatódik").format(n=len(jobs)),
+                             t("A legutóbb félbemaradt letöltések újra elindultak."),
+                             header=APP_NAME, action=lambda: self._switch_tab("2"))
+        self._refresh_queue_summary()
+
     def _refresh_queue_summary(self, announce=False):
+        self._save_queue()  # every queue change passes through here, so this is where we save
         waiting = sum(1 for j in self.jobs if j.state == "waiting")
         active = sum(1 for j in self.jobs if j.state == "active")
         self._update_nav_badges()
@@ -10245,14 +10770,14 @@ class QueueMixin:
             else:
                 btn.grid_remove()
         if announce and self._phase is None and self.info_data is None:
-            self.set_status(t('Hozzáadva. Most {active} fut, {waiting} vár. Az Előzmények oldalon látod az állapotukat.').format(active=active, waiting=waiting))
+            self.set_status(t('Hozzáadva. Most {active} fut, {waiting} vár. A Könyvtár oldalon látod az állapotukat.').format(active=active, waiting=waiting))
 
-class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
+class VidRipper(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
            DownloaderMixin, QueueMixin):
     def __init__(self, root):
         self.root = root
         root.title(APP_NAME)
-        # mentett beállítások és előzmények
+        # saved settings and history
         default_folder = os.path.join(os.path.expanduser("~"), "Downloads")
         self.settings = sanitize_settings(load_json(SETTINGS_FILE, {}), default_folder)
         self.theme_mode = self.settings["theme"]
@@ -10269,6 +10794,8 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         install_speed_limit()
         self._apply_speed_limit()
         self.sb_mode = self.settings["sb_mode"]
+        global NAME_STYLE
+        NAME_STYLE = self.settings["name_style"]
         self.sb_categories = list(self.settings["sb_categories"])
         self.toast_anim = self.settings["toast_anim"]
         self.notify_sound = self.settings["notify_sound"]
@@ -10278,11 +10805,11 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         self.player_engine = self.settings["player_engine"]
         self.player_geom = {"video": self.settings["player_geom_video"],
                             "audio": self.settings["player_geom_audio"]}
-        self.seen_version = self.settings["seen_version"]  # None: friss telepítés
-        self.temp_dir = self.settings["temp_dir"]  # None: a rendszer ideiglenes mappája
+        self.seen_version = self.settings["seen_version"]  # None: fresh install
+        self.temp_dir = self.settings["temp_dir"]  # None: the system temp folder
         cleanup_old_temp(self.temp_dir)
-        self.lock = self.settings["history_lock"]  # None, ha nincs jelszó
-        self.hist_locked = bool(self.lock)  # indításkor mindig zárolt, ha van jelszó
+        self.lock = self.settings["history_lock"]  # None if there is no password
+        self.hist_locked = bool(self.lock)  # always locked at startup when a password is set
         self._lock_fails = 0
         self._lock_blocked_until = 0.0
         self._last_activity = time.time()
@@ -10312,19 +10839,23 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
             notes.append(t("néhány oldal nem fog működni, mert a curl_cffi csomag hiányzik"))
         if not HAS_PIL:
             notes.append(t("a bélyegképek nem látszanak, mert a pillow csomag hiányzik"))
+        if not shutil.which("ffmpeg"):  # without it there is no mp3 and better-quality video cannot be merged
+            notes.append(t("az mp3 készítéséhez és a videók összefűzéséhez ffmpeg kell, de nincs telepítve"))
         start_text = ""
         if notes:
             start_text = t("\nFigyelem: ").strip() + " " + "; ".join(notes) + "."
+            if not shutil.which("ffmpeg"):
+                start_text += "\n" + ffmpeg_hint()
         self.status = tk.StringVar(value=start_text)
         self.busy = False
         self.jobs = []
         self._batch_ok = []
         self._batch_failed = 0
-        self._phase = None  # None, "fetch" vagy "download"
+        self._phase = None  # None, "fetch" or "download"
         self._fetch_pct = 0.0
         self._fetch_stage = ""
         self._fetch_t0 = time.time()
-        self._fetch_id = 0  # a lekérések azonosítója, a megszakított lekérés eredményét eldobjuk
+        self._fetch_id = 0  # fetch ids: the result of a cancelled fetch is dropped
         self._fetch_cancel = threading.Event()
         self._hist_url = ""
         self._about_win = None
@@ -10334,18 +10865,18 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         self._stall_job = None
         self._hist_index = None
 
-        # a lekért videóadatok
+        # the fetched video info
         self.info_data = None
         self.info_url = None
         self._photo = None
         self._thumb_bytes = None
 
-        # a yt-dlp frissítés-ellenőrzés állapota
+        # state of the yt-dlp update check
         self._latest_ytdlp = None
         self._latest_release = None
         self._checking = False
-        self._update_busy = None  # None vagy "download"
-        self._installed_ver = None  # az appból letöltött, még nem aktív verzió
+        self._update_busy = None  # None or "download"
+        self._installed_ver = None  # version downloaded by the app, not active yet
         self._update_status = YTDLP_NOTE or ""
 
         self._build_style()
@@ -10359,13 +10890,17 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         self.root.after(5000, self._lock_tick)
         self._start_update_check()
         self.root.after(UPDATE_CHECK_INTERVAL_MS, self._periodic_update_check)
+        self._check_app_update()
         self._setup_drop()
         self._setup_persistence()
         self._setup_about_menu()
+        self._restore_queue()
+        if needs_system(self.theme_style, self.theme_mode):
+            self._watch_system_theme()  # follow the system dark/light mode from startup too
 
-    # ---------- téma ----------
+    # ---------- Theme ----------
     def set_theme_mode(self, mode):
-        """A téma módjának váltása (sötét, világos vagy a rendszer szerint), mentéssel."""
+        """Switches the theme mode (dark, light or system) and saves it."""
         if mode not in THEME_MODES:
             return
         self.theme_mode = mode
@@ -10381,7 +10916,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
             pass
 
     def set_theme_style(self, style):
-        """Téma választása (PH, YT, VD), mentéssel együtt."""
+        """Selects the theme (PH, YT, VD) and saves it."""
         if style not in THEME_STYLES or style == self.theme_style:
             return
         self.theme_style = style
@@ -10401,31 +10936,44 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
 
 
     def _watch_system_theme(self):
-        """Ha a téma a rendszert követi (VD vagy Rendszer mód), pár másodpercenként megnézzük,
-        váltott-e a rendszer sötétre/világosra vagy más kiemelő színre."""
+        """When the theme follows the system (VD or system mode), watches for dark/light or
+        accent changes: when the app is activated (e.g. coming back from System Settings) and
+        every half minute as a fallback. Nothing is checked while minimized (on macOS each
+        check starts two processes)."""
         if getattr(self, "_sys_watch", False):
             return
         self._sys_watch = True
+        self.root.after(SYS_THEME_POLL_MS, self._sys_theme_tick)
 
-        def tick():
-            if not needs_system(self.theme_style, self.theme_mode):
-                self._sys_watch = False
-                return
+    def _sys_theme_tick(self):
+        if not needs_system(self.theme_style, self.theme_mode):
+            self._sys_watch = False
+            return
+        try:
+            if self.root.state() != "iconic":
+                self._check_system_look()
+            self.root.after(SYS_THEME_POLL_MS, self._sys_theme_tick)
+        except tk.TclError:
+            self._sys_watch = False
 
-            def work():
-                look = system_appearance()
-                try:
-                    self.root.after(0, lambda: done(look))
-                except Exception:
-                    pass
+    def _check_system_look(self, _event=None):
+        """Reads the system appearance on a background thread (at most every 2 s)."""
+        if not needs_system(self.theme_style, self.theme_mode) \
+                or getattr(self, "_sys_checking", False) \
+                or time.monotonic() - getattr(self, "_sys_checked", -9.0) < 2:
+            return
+        self._sys_checking = True
+        self._sys_checked = time.monotonic()
 
-            def done(look):
-                if needs_system(self.theme_style, self.theme_mode) and look != self._sys_look:
-                    self._sys_look = look
-                    self._apply_theme()
-                self.root.after(6000, tick)
-            threading.Thread(target=work, daemon=True).start()
-        self.root.after(6000, tick)
+        def work():
+            self._post(done, system_appearance())
+
+        def done(look):
+            self._sys_checking = False
+            if needs_system(self.theme_style, self.theme_mode) and look != self._sys_look:
+                self._sys_look = look
+                self._apply_theme()
+        threading.Thread(target=work, daemon=True).start()
 
     def _apply_theme(self):
         new = theme_palette(self.theme_style, self.theme_mode, self._sys_look)
@@ -10433,7 +10981,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         set_theme_radius(self.theme_style)
         if new == PAL:
             if RADIUS != radius_before:
-                retheme(self.root, PAL, PAL)  # csak a lekerekítés változott: újrarajzolás
+                retheme(self.root, PAL, PAL)  # only the corner radius changed: redraw
             return
         old = dict(PAL)
         apply_palette(new)
@@ -10448,13 +10996,18 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         for job in self.jobs:
             self._render_job_thumb(job)
 
-    # ---------- beállítások mentése ----------
+    # ---------- Saving settings ----------
     def _setup_persistence(self):
         self.browser.trace_add("write", self._schedule_save)
         self.folder.trace_add("write", self._schedule_save)
-        self.root.bind("<Configure>", self._on_configure, add="+")
+        # a bindtag only on the root window: an event bound to the root's name fires for every
+        # widget in Tk (every widget has the root's bindtag), even a thousand times per rebuild;
+        # this one only gets the root window's own events
+        self.root.bindtags(("VRRootOnly",) + self.root.bindtags())
+        self.root.bind_class("VRRootOnly", "<Configure>", self._on_configure)
+        self.root.bind_class("VRRootOnly", "<Activate>", self._check_system_look)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        try:  # Cmd+Q Macen
+        try:  # Cmd+Q on macOS
             self.root.createcommand("::tk::mac::Quit", self._on_close)
         except Exception:
             pass
@@ -10462,9 +11015,9 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
     def _on_configure(self, event):
         if event.widget is self.root:
             self._schedule_save()
-            # Macen az ablak mozgatása (főleg két kijelző között) után a saját rajzolású
-            # elemek (oldalsáv, logó, gombok) néha üresen maradtak, amíg rájuk nem mutattál:
-            # a mozgás végén mindet újrarajzoljuk
+            # on macOS, after moving the window (especially between displays) custom-drawn widgets
+            # (sidebar, logo, buttons) sometimes stayed blank until hovered, so they are all
+            # redrawn when the move ends
             job = getattr(self, "_repaint_job", None)
             if job is not None:
                 try:
@@ -10475,9 +11028,9 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
 
     def _repaint_chrome(self):
         self._repaint_job = None
-        roots = [self.sidebar]  # az oldalak elemei a méretváltozáskor maguktól újrarajzolódnak
-        # az oldalsáv háttere is (Macen mozgatás után néha feketén maradt): a színt újra
-        # beállítva a Tk újrafesti
+        roots = [self.sidebar]  # page widgets redraw themselves on resize
+        # the sidebar background too (it sometimes stayed black after a move on macOS): setting the
+        # colour again makes Tk repaint it
         side = [self.sidebar]
         while side:
             w = side.pop()
@@ -10538,6 +11091,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         data["max_parallel"] = self.max_parallel
         data["parallel_custom"] = self.parallel_custom
         data["sb_mode"] = self.sb_mode
+        data["name_style"] = NAME_STYLE
         data["sb_categories"] = list(self.sb_categories)
         folder = self.folder.get().strip()
         if os.path.isdir(folder):
@@ -10551,7 +11105,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         save_json(SETTINGS_FILE, data)
 
     def set_language_choice(self, code):
-        """A Nyelv választó: mentjük, és felajánljuk az újraindítást."""
+        """The language picker: saves the choice and offers a restart."""
         if code == self.language:
             return
         self.language = self.settings["language"] = code
@@ -10563,7 +11117,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
 
     def _on_close(self, restart=False):
         running = [j for j in self.jobs if j.unfinished]
-        text = t('Még {n_running} letöltés fut vagy vár. Ha kilépsz, ezek megszakadnak.\n\nBiztosan kilépsz?').format(n_running=len(running))
+        text = t('Még {n_running} letöltés fut vagy vár. Ha kilépsz, ezek megszakadnak, és a következő indításkor elölről folytatódnak.\n\nBiztosan kilépsz?').format(n_running=len(running))
         if any(j.live and j.state == "active" for j in running):
             text += "\n\n" + t("Az élő felvételt előbb állítsd le a Leállítás és mentés gombbal, "
                                "különben elveszik.")
@@ -10571,6 +11125,8 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
                 self.root, t("Kilépés"), text, yes_text=t("Kilépés"), no_text=t("Mégse"),
                 danger=True):
             return
+        self._save_queue()  # before cancelling, so the running downloads end up in the saved queue too
+        self._queue_ready = False  # the stopping downloads must not overwrite it any more
         for job in running:
             job.cancel_event.set()
         kill_all_tracked()
@@ -10582,10 +11138,10 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         if restart:
             relaunch_app()
 
-    # ---------- kinézet ----------
+    # ---------- Appearance ----------
     def _set_app_icon(self):
-        """Ablak-, tálca- és Dock-ikon a témához illően (theme_icon). Ha nincs icon.png,
-        az app ikon nélkül is megy."""
+        """Window, taskbar and Dock icon matching the theme (theme_icon). The app works without
+        icon.png too."""
         path = resource_path("icon.png")
         if not os.path.exists(path):
             return
@@ -10597,21 +11153,21 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
                 return
             img = theme_icon(style, path)
             if is_mac():
-                # Macen nem a Tk-n át: az iconphoto induláskor néha nem hatott, és a kettő
-                # felülírhatta egymást. A Dock ikon a mentett png-ből, AppKit-tel.
+                # on macOS not through Tk: iconphoto sometimes had no effect at startup and the two
+                # could overwrite each other. The Dock icon is set from the saved png with AppKit.
                 cache = os.path.join(app_data_dir(), "icons")
                 os.makedirs(cache, exist_ok=True)
                 png = os.path.join(cache, f"icon_{style}_{APP_VERSION}.png")
                 if not os.path.exists(png):
                     img.save(png)
-                for name in os.listdir(cache):  # a korábbi verziók ikonjai
+                for name in os.listdir(cache):  # icons of earlier versions
                     if name.endswith(".png") and not name.endswith(f"_{APP_VERSION}.png"):
                         try:
                             os.remove(os.path.join(cache, name))
                         except OSError:
                             pass
                 self._dock_png = png
-                for delay in (0, 400, 1500):  # induláskor a rendszer még átírhatja
+                for delay in (0, 400, 1500):  # the system may still override it at startup
                     self.root.after(delay, self._apply_dock_icon, png)
                 return
             self._icon = ImageTk.PhotoImage(img.resize((256, 256), Image.LANCZOS))
@@ -10621,7 +11177,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
 
     def _apply_dock_icon(self, png):
         if png != getattr(self, "_dock_png", None):
-            return  # közben újabb téma jött
+            return  # a newer theme came meanwhile
         try:
             mac_set_dock_icon(png)
         except Exception:
@@ -10640,7 +11196,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         style.configure("Dim.TLabel", foreground=GREY, font=(FONT_FAMILY, 13))
         style.configure("Status.TLabel", foreground=GREY, font=(FONT_FAMILY, 13))
 
-        # fülek
+        # tabs
         style.configure("TNotebook", background=BG, borderwidth=0, bordercolor=BG,
                         lightcolor=BG, darkcolor=BG, tabmargins=(14, 0, 0, 0))
         style.configure("TNotebook.Tab", background=PANEL, foreground=GREY,
@@ -10654,8 +11210,8 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
                   darkcolor=[("selected", ACCENT)],
                   padding=[("selected", (20, 8))],
                   expand=[("selected", (0, 0, 0, 0))])
-        # a fókuszkeret nélküli fülelrendezés
-        # a füleket a fenti kapcsoló váltja, a saját fülsor nem látszik
+        # tab layout without a focus ring; the tabs are switched by the sidebar, the native tab row
+        # is hidden
         style.layout("TNotebook.Tab", [])
 
         style.configure("Flat.TCombobox", fieldbackground=PANEL, background=PANEL,
@@ -10691,9 +11247,9 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
                         darkcolor=SCROLL, arrowsize=14)
         style.map("Vertical.TScrollbar", background=[("active", GREY)])
 
-        # a lenyíló mezők értékét az egérgörgő ne tudja véletlenül átváltani:
-        # csak a lenyíló menüből lehet választani (a görgetés az oldalt mozgatja)
-        # (az 'all' szintű elosztó ettől még görgeti az oldalt a lenyíló fölött is)
+        # the mouse wheel must not change a combobox value by accident: values are only picked from
+        # the dropdown (the wheel scrolls the page; the global scroll router still scrolls the page
+        # over a combobox)
         for seq in ("<MouseWheel>", "<Shift-MouseWheel>", "<Button-4>", "<Button-5>",
                     "<TouchpadScroll>"):
             try:
@@ -10707,7 +11263,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         self.root.option_add("*TCombobox*Listbox.selectForeground", ACCENT_FG)
 
     def _build_ui(self):
-        # bal oldali sáv: felirat, Letöltő / Előzmények / Beállítások, alul Ko-fi és verzió
+        # left sidebar: wordmark, Downloader / Library / Settings, Ko-fi and version at the bottom
         side = tk.Frame(self.root, bg=SIDEBAR, width=SIDEBAR_WIDTH)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
@@ -10719,10 +11275,10 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
 
         self.brand = BrandMark(side, self.theme_style)
         self.brand.pack(anchor="w", padx=18, pady=(22, 20))
-        tk.Label(side, text=t("KÖNYVTÁR"), bg=SIDEBAR, fg=GREY, font=get_font(10, "bold"),
+        tk.Label(side, text=t("KEZELŐ"), bg=SIDEBAR, fg=GREY, font=get_font(10, "bold"),
                  anchor="w").pack(fill="x", padx=20, pady=(0, 6))
         self.nav = {}
-        for key, icon, text, tab in (("dl", "⬇", t("Letöltő"), None), ("hist", "◷", t("Előzmények"), 2),
+        for key, icon, text, tab in (("dl", "⬇", t("Letöltő"), None), ("hist", "\u25b6\ufe0e", t("Könyvtár"), 2),
                                      ("set", "⚙", t("Beállítások"), 3)):
             item = NavItem(side, icon, text, lambda k=key: self._nav_go(k))
             item.pack(fill="x", padx=10, pady=1)
@@ -10735,25 +11291,35 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
             width=SIDEBAR_WIDTH - 36, height=38, bg="CONTROL", fg="TEXT",
             hover="CONTROL_HOVER", outline="BORDER", font=(FONT_FAMILY, 12, "bold"))
         self.kofi_btn.pack(side="bottom", pady=(0, 10))
-        # diszkrét értesítés frissítés vagy első indítás után, kattintásig látszik
+        # new public version: a call-out above the support button (opens the download page); only
+        # shown if a newer one was found at startup
+        self.app_update_row = tk.Frame(side, bg=SIDEBAR)
+        self.app_update_pill = RoundButton(
+            self.app_update_row, "\u2193  " + t("Új verzió érhető el"),
+            lambda: webbrowser.open(RELEASES_PAGE), width=SIDEBAR_WIDTH - 36, height=38,
+            bg="ACCENT", fg="ACCENT_FG", hover="ACCENT_HOVER", font=get_font(12, "bold"))
+        self.app_update_pill.pack()
+        # subtle notice after an update or first start, visible until clicked
         self.news_row = tk.Frame(side, bg=SIDEBAR)
         self.news_row.pack(side="bottom", fill="x", padx=14)
         self.news_pill = tk.Label(
             self.news_row, text=t("●  Újdonságok ebben a verzióban"), wraplength=SIDEBAR_WIDTH - 50,
             bg=PANEL, fg=ACCENT_TEXT, cursor="hand2", padx=10, pady=5, justify="left",
             highlightthickness=1, highlightbackground=BORDER, font=(FONT_FAMILY, 11))
-        # felengedésre nyílik, mint a gombok: lenyomásra a Mac a főablakot hozná vissza előre
+        # opens on release like buttons: on press macOS would bring the main window back to the
+        # front
         self.news_pill.bind("<ButtonRelease-1>", lambda e: self.show_changelog())
         self.news_pill.bind("<Enter>", lambda e: self.news_pill.configure(
             font=get_font(11, underline=True)))
         self.news_pill.bind("<Leave>", lambda e: self.news_pill.configure(
             font=(FONT_FAMILY, 11)))
 
-        # Cmd/Ctrl+K: keresőmenü (a bal sávban is látszik, hogy van ilyen)
+        # Cmd/Ctrl+K command menu (also shown in the sidebar so it can be discovered)
         self.cmd_menu = CommandMenu(self)
         search = NavItem(side, "\u2315", t("Keresés"), self.cmd_menu.toggle)
         search.set_badge("\u2318K" if is_mac() else t("Ctrl+K"))
         search.pack(side="bottom", fill="x", padx=10, pady=(0, 10), after=self.kofi_btn)
+        self._app_update_latest = None
         self.nav_search = search
         self.root.bind_all(f"<{MOD_KEY}-k>", self.cmd_menu.toggle)
         self.root.bind_all(f"<{MOD_KEY}-K>", self.cmd_menu.toggle)
@@ -10763,7 +11329,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
 
         self.notebook = ttk.Notebook(content)
         self.notebook.pack(fill="both", expand=True, pady=(4, 0))
-        # fülváltáskor ez a háttérszínű takaró húzódik el az új fül elől
+        # on tab change this background-coloured veil slides away from the new tab
         self._veil = tk.Frame(self.notebook, bg=BG)
         self._veil_job = None
         main = ttk.Frame(self.notebook, padding=(28, 18, 28, 18))
@@ -10772,10 +11338,10 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         settings = ttk.Frame(self.notebook, padding=(28, 18, 28, 18))
         self.notebook.add(main, text=t("Letöltő"))
         self.notebook.add(downloads, text=t("Aktív letöltések"))
-        self.notebook.add(history, text=t("Előzmények"))
+        self.notebook.add(history, text=t("Könyvtár"))
         self.notebook.add(settings, text=t("Beállítások"))
-        # a futó letöltések az Előzmények oldalon vannak; a régi fül sorszáma megmarad,
-        # hogy a többi oldal sorszáma ne változzon, de soha nem látszik
+        # running downloads live on the history page; the old tab keeps its index so the other
+        # pages' indices do not change, but it is never shown
         self.notebook.hide(downloads)
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed, add="+")
 
@@ -10784,12 +11350,12 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         self._build_settings_tab(settings)
 
     def _switch_tab(self, value):
-        """Fülváltás animáció nélkül (az oldalsávos elrendezéshez az azonnali váltás illik)."""
+        """Switches tabs without animation (instant switching suits the sidebar layout)."""
         try:
             new, old = int(value), self.notebook.index("current")
         except (ValueError, tk.TclError):
             return
-        if new == 1:  # a régi "Aktív letöltések": ma az Előzmények teteje
+        if new == 1:  # the old "Active downloads" tab: now the top of the history page
             new = 2
         if new == old:
             return
@@ -10817,7 +11383,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         if t >= 1:
             self._veil_end()
             return
-        e = 1 - (1 - t) ** 2  # lassulva érkezik
+        e = 1 - (1 - t) ** 2  # decelerates on arrival
         try:
             width = self.notebook.winfo_width()
             cut = int(e * width)
@@ -10828,7 +11394,8 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
             self._veil_end()
 
     def _fly_thumbnail(self, data, src):
-        """A letöltés indításakor a bélyegkép egy íven az oldalsáv Előzmények sorához repül."""
+        """When a download starts, the thumbnail flies along an arc to the sidebar's Library
+        row."""
         if not (HAS_PIL and data and src):
             return
         base = self._thumb_image(data, (src[2], src[3]), bg=BG)
@@ -10836,7 +11403,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
             return
         root = self.root
         try:
-            ctl = self.nav["hist"]  # az oldalsáv Előzmények sorába repül
+            ctl = self.nav["hist"]  # flies to the Library row of the sidebar
             tx = ctl.winfo_rootx() - root.winfo_rootx() + ctl.winfo_width() - 24
             ty = ctl.winfo_rooty() - root.winfo_rooty() + ctl.winfo_height() / 2
             c0x = src[0] - root.winfo_rootx() + base.width / 2
@@ -10844,7 +11411,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
             label = tk.Label(root, bd=0, highlightthickness=0, bg=BG)
         except tk.TclError:
             return
-        # az ív vezérlőpontja: előbb felfelé, aztán oldalra, ez ad lendületet
+        # control point of the arc: up first, then sideways, which gives it momentum
         qx, qy = c0x + (tx - c0x) * 0.15, ty + (c0y - ty) * 0.15
         t0, dur = time.time(), 0.32 * ANIM_SLOW
 
@@ -10875,9 +11442,9 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
                 finish()
         step()
 
-    # ---------- linkek behúzása ----------
+    # ---------- Dropping links ----------
     def _setup_drop(self):
-        """A böngészőből behúzott link (vagy több link) az ablak bármely részére ejthető."""
+        """A link (or several) dragged from the browser can be dropped anywhere on the window."""
         self.drop_ready = False
         if not HAS_DND:
             return
@@ -10894,7 +11461,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         links = extract_links(data)
         if links:
             return links
-        # fájlok: a böngésző linkfájljai (.url, .webloc) vagy szövegfájl linkekkel
+        # files: browser link files (.url, .webloc) or text files with links
         try:
             paths = self.root.tk.splitlist(data)
         except tk.TclError:
@@ -10924,7 +11491,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         return action
 
     def _nav_go(self, key):
-        """Kattintás a bal oldali sávban: a Letöltő a legutóbbi aloldalára nyílik."""
+        """Click in the sidebar: opens the page."""
         tab = {"dl": 0, "hist": 2, "set": 3}[key]
         self._switch_tab(str(tab))
 
@@ -10932,7 +11499,7 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         try:
             n = 0 if self.hist_locked else sum(1 for j in self.jobs if j.state == "active")
             self.nav["dl"].set_badge("")
-            # futó letöltésnél mozgó lefelé nyíl és a futók száma, egyébként semmi
+            # while downloading a bobbing down arrow and the number running, otherwise nothing
             self.nav["hist"].set_activity(n)
         except (AttributeError, KeyError, tk.TclError):
             pass
@@ -10947,15 +11514,16 @@ class PHDL(LockMixin, HistoryMixin, SettingsMixin, UpdateMixin, ExtrasMixin,
         if index == 2 and self.hist_locked:
             self.root.after(50, self._lock_entry.focus_set)
         if index == 2 and not self.hist_locked:
-            self._check_missing_async()  # közben törölhettél fájlt, vagy visszajött a NAS
+            self._check_missing_async()  # a file may have been deleted meanwhile, or the NAS came back
         if index == 3 and self._latest_ytdlp is None:
-            # ha az induláskori ellenőrzés nem sikerült (pl. nem volt net), újrapróbáljuk
+            # retry if the startup check failed (e.g. no network)
             self._start_update_check()
 
 
 def relaunch_app():
-    """Az app újraindítása (a nyelvváltás után). Macen a kész app az open paranccsal,
-    Linuxon az AppImage fájl indul újra (a kicsomagolt mappa a kilépéskor eltűnik)."""
+    """Restarts the app (after a language change). On macOS the packaged app is reopened with
+    open, on Linux the AppImage file is started again (the extracted folder disappears on
+    exit)."""
     try:
         if getattr(sys, "frozen", False):
             exe = os.environ.get("APPIMAGE") or sys.executable
@@ -10975,7 +11543,7 @@ def relaunch_app():
 
 
 def self_test():
-    """Hibakereséshez: "--selftest" kapcsolóval kiírja, melyik ffmpeg és mpv indulna."""
+    """For debugging: with "--selftest" prints which ffmpeg and mpv would be used."""
     print(f"{APP_NAME} {APP_VERSION}, yt-dlp {YTDLP_VERSION}, hang: {HAS_AUDIO}, "
           f"nyelv: {LANG} ({t('Beállítások')}), behúzás: {HAS_DND}")
     for name, flag in (("ffmpeg", "-version"), ("ffprobe", "-version"), ("mpv", "--version")):
@@ -10997,13 +11565,14 @@ if __name__ == "__main__":
     enable_sharp_scaling()
     root = tk.Tk()
     install_error_logging(root)
-    PHDL(root)
-    root.after(1500, hide_support_folders)  # addigra az adatok mappa is létrejön
+    migrate_log()
+    VidRipper(root)
+    root.after(1500, hide_support_folders)  # by then the data folder exists too
     root.mainloop()
-    # a háttérszálak (yt-dlp, ffmpeg) ne tartsák életben az appot kilépés után
+    # background threads (yt-dlp, ffmpeg) must not keep the app alive after quitting
     kill_all_tracked()
     for stream in (sys.stdout, sys.stderr):
-        # ablakos (konzol nélküli) Windows appnál ezek None-ok
+        # these are None in the windowed (console-less) Windows app
         try:
             if stream is not None:
                 stream.flush()

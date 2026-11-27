@@ -1,6 +1,6 @@
 """A Vid-Ripper angol (EN) és német (DE) szövegei.
 
-A kulcs a magyar szöveg, pontosan úgy, ahogy a PHDL.py-ban a t("...") hívásban szerepel. Ha
+A kulcs a magyar szöveg, pontosan úgy, ahogy a vidripper.py-ban a t("...") hívásban szerepel. Ha
 egy szöveg hiányzik, az app a magyart mutatja. A kapcsos zárójeles részeket ({n}, {name})
 a program tölti ki, ezeket a fordításban is meg kell hagyni.
 """
@@ -1073,6 +1073,70 @@ EN = {
         'Bug fixes, the first public release.',
     'Hibajavítások.':
         'Bug fixes.',
+    'Első fejlesztői változat: külön app, saját adatokkal.':
+        'First development build: a separate app with its own data.',
+    'Új verzió érhető el':
+        'New version available',
+    'Hibajavítások és automatikus értesítés új verzió elérhetőségéről.':
+        'Bug fixes and automatic notification when a new version is available.',
+    'Könyvtár':
+        'Library',
+    'KEZELŐ':
+        'MANAGE',
+    'Az Előzmények oldal új neve Könyvtár.':
+        'The History page is now called Library.',
+    'Hozzáadva. Most {active} fut, {waiting} vár. A Könyvtár oldalon látod az állapotukat.':
+        'Added. Running: {active}, waiting: {waiting}. You can follow them on the Library page.',
+    'Jelszóval elrejtheted a Könyvtár oldalt (a futó letöltésekkel együtt) és a korábbi letöltési útvonalak listáját a kíváncsi szemek elől. Az app indítása után és {n} perc tétlenség után újra kéri a jelszót.':
+        'With a password you can hide the Library page (running downloads included) and the list of previous download folders from prying eyes. It asks for the password again after the app starts and after {n} minutes of inactivity.',
+    'Megjelenés: Rendszer':
+        'Appearance: System',
+    'Az új yt-dlp az app újraindítása után lép életbe.':
+        'The new yt-dlp takes effect after the app restarts.',
+    'Hibajavítások: az egyéni sebességkorlát működik, a kijelölés nem csúszik el, ha közben kész lesz egy letöltés, és az azonos nevű videók nem írják felül egymást.':
+        'Bug fixes: the custom speed limit works, the selection no longer shifts when a download finishes, and videos with the same name no longer replace each other.',
+    'az mp3 készítéséhez és a videók összefűzéséhez ffmpeg kell, de nincs telepítve':
+        'ffmpeg is needed for mp3 files and for joining video and audio, but it is not installed',
+    'yt-dlp frissítés':
+        'yt-dlp update',
+    'A legutóbb félbemaradt letöltések újra elindultak.':
+        'The downloads that were interrupted last time have started again.',
+    '{n} letöltés folytatódik':
+        '{n} downloads resumed',
+    'Még {n_running} letöltés fut vagy vár. Ha kilépsz, ezek megszakadnak, és a következő indításkor elölről folytatódnak.\n\nBiztosan kilépsz?':
+        '{n_running} downloads are still running or waiting. If you quit, they stop and start over the next time you open the app.\n\nQuit anyway?',
+    'Eredeti nyelv':
+        'Original language',
+    'Felirat (ha van)':
+        'Subtitles (if any)',
+    'Fájlnév':
+        'File name',
+    'Dátum_Cím (alap)':
+        'Date_Title (default)',
+    'Cím':
+        'Title',
+    'Feltöltő_Cím':
+        'Uploader_Title',
+    'Cím_Dátum':
+        'Title_Date',
+    'Ebből áll össze a letöltött fájl neve. A felbontás (például 1080p) videónál mindig a végére kerül, így ugyanaz a videó két minőségben nem írja felül egymást. A már letöltött fájlok neve nem változik.':
+        "This is how the downloaded file is named. For videos the resolution (for example 1080p) always goes at the end, so the same video in two qualities won't replace each other. Files you already downloaded keep their names.",
+    'Például: {x}':
+        'Example: {x}',
+    'Videó címe':
+        'Video title',
+    'Csatorna':
+        'Channel',
+    'A félbemaradt letöltések a következő indításkor folytatódnak.':
+        'Interrupted downloads continue the next time you open the app.',
+    'Lejátszási listánál is kérhető felirat és SponsorBlock.':
+        'Subtitles and SponsorBlock now work for playlists too.',
+    'A fájlnév felépítése a Beállításokban választható.':
+        'You can choose how file names are built in Settings.',
+    'Az Előzmények oldal új neve Könyvtár, és gyorsabb lett: hosszú listánál sem akad meg letöltés vagy témaváltás közben.':
+        'The History page is now called Library, and it got faster: even a long list no longer stutters during downloads or theme changes.',
+    'Az app szól, ha új verzió érhető el.':
+        'The app lets you know when a new version is available.',
 }
 
 
@@ -2144,4 +2208,68 @@ DE = {
         'Fehlerbehebungen, die erste öffentliche Version.',
     'Hibajavítások.':
         'Fehlerbehebungen.',
+    'Első fejlesztői változat: külön app, saját adatokkal.':
+        'Erste Entwicklerversion: eine eigene App mit eigenen Daten.',
+    'Új verzió érhető el':
+        'Neue Version verfügbar',
+    'Hibajavítások és automatikus értesítés új verzió elérhetőségéről.':
+        'Fehlerbehebungen und automatische Benachrichtigung über neue Versionen.',
+    'Könyvtár':
+        'Bibliothek',
+    'KEZELŐ':
+        'VERWALTEN',
+    'Az Előzmények oldal új neve Könyvtár.':
+        'Die Seite „Verlauf“ heißt jetzt „Bibliothek“.',
+    'Hozzáadva. Most {active} fut, {waiting} vár. A Könyvtár oldalon látod az állapotukat.':
+        'Hinzugefügt. Laufend: {active}, wartend: {waiting}. Den Stand siehst du auf der Seite „Bibliothek“.',
+    'Jelszóval elrejtheted a Könyvtár oldalt (a futó letöltésekkel együtt) és a korábbi letöltési útvonalak listáját a kíváncsi szemek elől. Az app indítása után és {n} perc tétlenség után újra kéri a jelszót.':
+        'Mit einem Passwort kannst du die Seite „Bibliothek“ (samt laufender Downloads) und die Liste früherer Download-Ordner vor neugierigen Blicken verbergen. Nach dem Start der App und nach {n} Minuten Inaktivität fragt sie erneut nach dem Passwort.',
+    'Megjelenés: Rendszer':
+        'Erscheinungsbild: System',
+    'Az új yt-dlp az app újraindítása után lép életbe.':
+        'Das neue yt-dlp wird nach einem Neustart der App wirksam.',
+    'Hibajavítások: az egyéni sebességkorlát működik, a kijelölés nem csúszik el, ha közben kész lesz egy letöltés, és az azonos nevű videók nem írják felül egymást.':
+        'Fehlerbehebungen: Das eigene Tempolimit funktioniert, die Auswahl verrutscht nicht mehr, wenn ein Download fertig wird, und gleichnamige Videos ersetzen sich nicht mehr gegenseitig.',
+    'az mp3 készítéséhez és a videók összefűzéséhez ffmpeg kell, de nincs telepítve':
+        'für MP3-Dateien und zum Zusammenfügen von Bild und Ton wird ffmpeg benötigt, ist aber nicht installiert',
+    'yt-dlp frissítés':
+        'yt-dlp-Update',
+    'A legutóbb félbemaradt letöltések újra elindultak.':
+        'Die zuletzt unterbrochenen Downloads wurden wieder gestartet.',
+    '{n} letöltés folytatódik':
+        '{n} Downloads werden fortgesetzt',
+    'Még {n_running} letöltés fut vagy vár. Ha kilépsz, ezek megszakadnak, és a következő indításkor elölről folytatódnak.\n\nBiztosan kilépsz?':
+        'Es laufen oder warten noch {n_running} Downloads. Wenn du beendest, werden sie abgebrochen und beim nächsten Start von vorn fortgesetzt.\n\nTrotzdem beenden?',
+    'Eredeti nyelv':
+        'Originalsprache',
+    'Felirat (ha van)':
+        'Untertitel (falls vorhanden)',
+    'Fájlnév':
+        'Dateiname',
+    'Dátum_Cím (alap)':
+        'Datum_Titel (Standard)',
+    'Cím':
+        'Titel',
+    'Feltöltő_Cím':
+        'Kanal_Titel',
+    'Cím_Dátum':
+        'Titel_Datum',
+    'Ebből áll össze a letöltött fájl neve. A felbontás (például 1080p) videónál mindig a végére kerül, így ugyanaz a videó két minőségben nem írja felül egymást. A már letöltött fájlok neve nem változik.':
+        'So wird die geladene Datei benannt. Bei Videos steht die Auflösung (zum Beispiel 1080p) immer am Ende, damit sich dasselbe Video in zwei Qualitäten nicht gegenseitig ersetzt. Bereits geladene Dateien behalten ihren Namen.',
+    'Például: {x}':
+        'Beispiel: {x}',
+    'Videó címe':
+        'Videotitel',
+    'Csatorna':
+        'Kanal',
+    'A félbemaradt letöltések a következő indításkor folytatódnak.':
+        'Unterbrochene Downloads werden beim nächsten Start fortgesetzt.',
+    'Lejátszási listánál is kérhető felirat és SponsorBlock.':
+        'Untertitel und SponsorBlock gibt es jetzt auch für Playlists.',
+    'A fájlnév felépítése a Beállításokban választható.':
+        'In den Einstellungen kannst du wählen, wie Dateinamen aufgebaut sind.',
+    'Az Előzmények oldal új neve Könyvtár, és gyorsabb lett: hosszú listánál sem akad meg letöltés vagy témaváltás közben.':
+        'Die Seite „Verlauf“ heißt jetzt „Bibliothek“ und ist schneller: Auch eine lange Liste ruckelt bei Downloads oder Themenwechsel nicht mehr.',
+    'Az app szól, ha új verzió érhető el.':
+        'Die App sagt Bescheid, wenn eine neue Version verfügbar ist.',
 }

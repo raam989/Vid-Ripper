@@ -3,9 +3,23 @@ import subprocess
 import sys
 import venv
 
-# Ezt a fájlt ugyanabba a mappába kell tenni, ahol a PHDL.py, a translations.py és az icon.png van
+# Ezt a fájlt ugyanabba a mappába kell tenni, ahol a vidripper.py, a translations.py és az icon.png van
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPT = os.path.join(HERE, "PHDL.py")
+SCRIPT = os.path.join(HERE, "vidripper.py")
+
+
+def app_name():
+    """A fejlesztői változat (a verzióban "-dev") külön app: Vid-Ripper Dev."""
+    import re
+    try:
+        text = open(SCRIPT, encoding="utf-8").read()
+    except OSError:
+        return "Vid-Ripper"
+    m = re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', text, re.M)
+    return "Vid-Ripper Dev" if m and "-dev" in m.group(1) else "Vid-Ripper"
+
+
+NAME = app_name()
 ICON_PNG = os.path.join(HERE, "icon.png")
 ICON_ICNS = os.path.join(HERE, "icon.icns")
 ENV = os.path.join(HERE, "phdl-env")
@@ -31,17 +45,17 @@ if "Thonny.app" in sys.executable:
         f"{PYTHON_ORG} {os.path.join(HERE, 'build_app.py')}")
 
 if not os.path.exists(SCRIPT):
-    sys.exit("Nem találom a PHDL.py fájlt itt: " + SCRIPT +
-             "\nEzt a fájlt ugyanabba a mappába told, ahol a PHDL.py van.")
+    sys.exit("Nem találom a vidripper.py fájlt itt: " + SCRIPT +
+             "\nEzt a fájlt ugyanabba a mappába told, ahol a vidripper.py van.")
 
 if not os.path.exists(os.path.join(HERE, "translations.py")):
-    print("Figyelem: nem találom a translations.py fájlt a PHDL.py mellett, az app csak "
+    print("Figyelem: nem találom a translations.py fájlt a vidripper.py mellett, az app csak "
           "magyarul lesz elérhető.\n")
 
 has_icon = os.path.exists(ICON_PNG)
 if not has_icon:
     print("Figyelem: nem találom az icon.png fájlt, az app ikon nélkül készül el.\n"
-          "Másold az icon.png-t a PHDL.py mellé, ha ikont szeretnél.\n")
+          "Másold az icon.png-t a vidripper.py mellé, ha ikont szeretnél.\n")
 
 print("1/3  Virtuális környezet létrehozása...")
 if not os.path.exists(ENV_PY):
@@ -71,7 +85,7 @@ if has_icon:
 
 print("\n3/3  App összeállítása (ez 2-5 percig is eltarthat, közben fut a kiírás)...")
 cmd = [ENV_PY, "-m", "PyInstaller", "--noconfirm", "--windowed",
-       "--name", "Vid-Ripper",
+       "--name", NAME,
        "--collect-all", "yt_dlp",
        "--collect-all", "curl_cffi",
        "--collect-all", "PIL",
@@ -88,7 +102,7 @@ code = run(cmd)
 if code != 0:
     sys.exit("Az összeállítás nem sikerült, nézd meg a fenti hibát.")
 
-app = os.path.join(HERE, "dist", "Vid-Ripper.app")
+app = os.path.join(HERE, "dist", NAME + ".app")
 print("\nKész! Az app itt van:", app)
 if sys.platform == "darwin":
     subprocess.run(["open", "-R", app])

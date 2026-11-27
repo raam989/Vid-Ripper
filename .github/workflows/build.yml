@@ -107,7 +107,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VER=$(python -c "import re; print(re.search(r'APP_VERSION = \"([^\"]+)\"', open('PHDL.py', encoding='utf-8').read()).group(1))")
+          VER=$(python -c "import re; print(re.search(r'APP_VERSION = \"([^\"]+)\"', open('vidripper.py', encoding='utf-8').read()).group(1))")
           TAG="v$VER"
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Vid-Ripper $VER" --notes "Vid-Ripper $VER" --target "$GITHUB_SHA" || true
           sleep 5

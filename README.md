@@ -59,7 +59,7 @@ Python 3.10 or newer with Tkinter is needed, plus FFmpeg and mpv on the system.
 
 ```
 pip install "yt-dlp[curl-cffi]" pillow sounddevice tkinterdnd2
-python PHDL.py
+python vidripper.py
 ```
 
 `build_desktop.py` builds the same packages as the Releases page with PyInstaller
@@ -69,10 +69,10 @@ python PHDL.py
 
 - Please respect the terms of the sites you download from and the rights of the
   creators. Download only what you are allowed to.
-- Settings, history and the log file (`phdl.log`) are stored on your own computer only.
+- Settings, history and the log file (`vid-ripper.log`) are stored on your own computer only.
   The app connects to the sites you download from, to PyPI (yt-dlp updates) and, for
   YouTube videos, to SponsorBlock (only a short hash of the video ID is sent).
-- If something goes wrong, please open an issue and attach `phdl.log`. On Mac it is in
+- If something goes wrong, please open an issue and attach `vid-ripper.log`. On Mac it is in
   `~/Library/Application Support/Vid-Ripper`, on Windows in the `adatok` folder, on Linux
   in `~/.config/vid-ripper`.
 
@@ -142,17 +142,17 @@ Python 3.10 vagy újabb kell Tkinterrel, a gépen pedig FFmpeg és mpv.
 
 ```
 pip install "yt-dlp[curl-cffi]" pillow sounddevice tkinterdnd2
-python PHDL.py
+python vidripper.py
 ```
 
 ### Fontos
 
 - Tartsd tiszteletben az oldalak felhasználási feltételeit és az alkotók jogait. Csak
   azt töltsd le, amihez jogod van.
-- A beállítások, az előzmények és a napló (`phdl.log`) csak a saját gépeden vannak. Az
+- A beállítások, az előzmények és a napló (`vid-ripper.log`) csak a saját gépeden vannak. Az
   app csak a letöltési oldalakhoz, a PyPI-hoz (yt-dlp frissítés) és YouTube videóknál a
   SponsorBlockhoz kapcsolódik (ilyenkor csak a videó azonosítójának egy rövid hash-e megy el).
-- Ha valami nem működik, nyiss egy issue-t, és csatold a `phdl.log` fájlt. Macen a
+- Ha valami nem működik, nyiss egy issue-t, és csatold a `vid-ripper.log` fájlt. Macen a
   `~/Library/Application Support/Vid-Ripper`, Windowson az `adatok`, Linuxon a
   `~/.config/vid-ripper` mappában van.
 
