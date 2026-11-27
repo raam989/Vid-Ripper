@@ -1339,6 +1339,33 @@ class SponsorFadePP(yt_dlp.postprocessor.PostProcessor):
 yt_dlp.postprocessor.postprocessors.value["SponsorFadePP"] = SponsorFadePP
 
 
+class SafeEmbedThumbnailPP(yt_dlp.postprocessor.EmbedThumbnailPP):
+    """Borítókép a fájlba, de ha az ffmpeg nem tudja beletenni (furcsa képformátum vagy
+    tároló, egyes oldalaknál mindig), a letöltés nem bukik el: a videó borító nélkül
+    elkészül, a kép törlődik."""
+
+    def __init__(self, downloader=None, already_have_thumbnail=False, on_fail=None):
+        super().__init__(downloader, already_have_thumbnail)
+        self._on_fail = on_fail
+
+    def run(self, info):
+        try:
+            return super().run(info)
+        except yt_dlp.postprocessor.embedthumbnail.EmbedThumbnailPPError as e:
+            self.report_warning(f"Borítókép nélkül: {e}")
+            if self._on_fail:
+                self._on_fail(str(e))
+            files = []
+            for th in info.get("thumbnails") or []:
+                path = th.pop("filepath", None)
+                if path and os.path.exists(path) and not self._already_have_thumbnail:
+                    files.append(path)
+            return files, info
+
+
+yt_dlp.postprocessor.postprocessors.value["SafeEmbedThumbnailPP"] = SafeEmbedThumbnailPP
+
+
 def fetch_ytdlp_release():
     """A legfrissebb yt-dlp kiadás adatai a PyPI-ról. Hiba esetén None."""
     try:
@@ -9464,7 +9491,8 @@ class ExtrasMixin:
             pps.append({"key": "FFmpegMetadata", "add_chapters": True,
                         "add_metadata": bool(job.embed_meta), "add_infojson": False})
         if job.embed_meta and not job.live:
-            pps.append({"key": "EmbedThumbnail", "already_have_thumbnail": False})
+            pps.append({"key": "SafeEmbedThumbnail", "already_have_thumbnail": False,
+                        "on_fail": lambda why: setattr(job, "thumb_failed", why)})
             opts["writethumbnail"] = True
             tmpl = opts.get("outtmpl")
             if isinstance(tmpl, str):
@@ -9758,7 +9786,7 @@ class QueueMixin:
                 raise
             opts["writethumbnail"] = False
             opts["postprocessors"] = [pp for pp in opts.get("postprocessors", [])
-                                      if pp.get("key") != "EmbedThumbnail"]
+                                      if pp.get("key") not in ("EmbedThumbnail", "SafeEmbedThumbnail")]
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([job.url])
 
