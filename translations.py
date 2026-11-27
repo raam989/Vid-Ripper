@@ -1071,6 +1071,8 @@ EN = {
         'Purple',
     'Hibajavítások, az első nyilvános kiadás.':
         'Bug fixes, the first public release.',
+    'Hibajavítások.':
+        'Bug fixes.',
 }
 
 
@@ -2140,4 +2142,6 @@ DE = {
         'Lila',
     'Hibajavítások, az első nyilvános kiadás.':
         'Fehlerbehebungen, die erste öffentliche Version.',
+    'Hibajavítások.':
+        'Fehlerbehebungen.',
 }

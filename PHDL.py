@@ -22,7 +22,7 @@ from tkinter import ttk, filedialog
 from tkinter import font as tkfont
 
 APP_NAME = "Vid-Ripper"
-APP_VERSION = "5.1"
+APP_VERSION = "5.1.1"
 SUPPORT_URL = "https://ko-fi.com/twosix989"
 CREDIT = "app by 2six"
 OLD_APP_NAME = "PH Downloader"  # a régi adatmappa neve, az átvitelhez
@@ -1875,6 +1875,7 @@ LOCK_WAIT_SECONDS = 30
 
 
 CHANGELOG = [
+    ("5.1.1", [t("Hibajavítások.")]),
     ("5.1", [t("Hibajavítások, az első nyilvános kiadás.")]),
     ("5.0.3", [t("Ablak átméretezéssel kapcsolatos hibák javítása")]),
     ("5.0.2", [t("Bugfixek, előzmények oldal finomhangolása.")]),
@@ -4114,6 +4115,13 @@ class CanvasStack:
         sync = getattr(widget, "sync_height", None)
         if sync is not None:
             return sync()
+        if widget.winfo_class() == "Frame" and not (
+                widget.grid_slaves() or widget.pack_slaves() or widget.place_slaves()):
+            # a Tk az üressé vált keret régi méretét megtartja (pl. ha a FOLYAMATBAN rész
+            # eltűnt): ilyenkor kézzel zsugorítjuk, különben nagy üres hely marad
+            if widget.winfo_reqheight() > 1:
+                widget.configure(height=1)
+            return 1
         return widget.winfo_reqheight()
 
     def relayout_soon(self):
