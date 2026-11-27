@@ -1,0 +1,115 @@
+name: Build
+
+# Kézzel indítható (Actions fül, "Run workflow"), vagy ha v-vel kezdődő címkét (tag) töltesz fel
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # a Releases részbe feltöltéshez
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux: a régebbi Ubuntun épített AppImage az újabb rendszereken is fut
+        os: [windows-latest, ubuntu-22.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Linux rendszercsomagok
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2 ffmpeg mpv file
+
+      # az mpv, az ffmpeg és az ffprobe a közös könyvtáraikkal egy mappába (az AppImage-be kerül)
+      - name: Segédprogramok és AppImage eszközök (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x linuxdeploy appimagetool
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          ./linuxdeploy --appdir tools-appdir --executable /usr/bin/mpv \
+              --executable /usr/bin/ffmpeg --executable /usr/bin/ffprobe \
+              --library "$(ls /usr/lib/x86_64-linux-gnu/libportaudio.so.2)"
+          echo "TOOLS_APPDIR=$PWD/tools-appdir" >> "$GITHUB_ENV"
+          echo "APPIMAGETOOL=$PWD/appimagetool" >> "$GITHUB_ENV"
+
+      - name: Mac ffmpeg (a teszteléshez, a .app nem csomagolja)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: ffmpeg letöltése (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-dl
+          $bin = (Get-ChildItem ffmpeg-dl -Directory | Select-Object -First 1).FullName + "\bin"
+          "FFMPEG_DIR=$bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: mpv letöltése (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = gh api repos/shinchiro/mpv-winbuild-cmake/releases/latest --jq '.assets[].name' |
+              Where-Object { $_ -match '^mpv-x86_64-\d{8}-git-.*\.7z$' } | Select-Object -First 1
+          if (-not $name) { throw "Nem találom az mpv Windows csomagot a kiadásban" }
+          gh release download -R shinchiro/mpv-winbuild-cmake --pattern $name --output mpv.7z
+          7z x mpv.7z -ompv-dl -y | Out-Null
+          $dir = (Get-ChildItem mpv-dl -Recurse -Filter mpv.exe | Select-Object -First 1).DirectoryName
+          "MPV_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Az mpv a vulkan-1.dll-t is keresi indításkor, de sok Windowson nincs meg. Ha a csomag
+          # nem tartalmazza, a LunarG futtatókörnyezetéből tesszük mellé.
+          if (-not (Test-Path "$dir\vulkan-1.dll")) {
+            $found = $null
+            foreach ($c in @("$env:SystemRoot\System32\vulkan-1.dll", "$env:VULKAN_SDK\Bin\vulkan-1.dll")) {
+              if ($c -and (Test-Path $c)) { $found = $c; break }
+            }
+            if (-not $found) {
+              try {
+                Invoke-WebRequest https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-runtime-components.zip -OutFile vk.zip
+                Expand-Archive vk.zip -DestinationPath vk-dl -Force
+                $f = Get-ChildItem vk-dl -Recurse -Filter vulkan-1.dll | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+                if ($f) { $found = $f.FullName }
+              } catch { Write-Warning "Vulkan letöltés nem sikerült: $_" }
+            }
+            if ($found) { Copy-Item $found $dir; Write-Host "vulkan-1.dll hozzáadva: $found" }
+            else { Write-Warning "Nincs vulkan-1.dll, az mpv egyes gépeken nem indul el" }
+          }
+
+      - name: Python csomagok
+        run: python -m pip install pyinstaller pillow sounddevice "tkinterdnd2>=0.7" "yt-dlp[curl-cffi]"
+
+      - name: Build
+        run: python build_desktop.py
+
+      - name: AppImage próba (Linux)
+        if: runner.os == 'Linux'
+        run: APPIMAGE_EXTRACT_AND_RUN=1 dist/*.AppImage --selftest
+
+      # A kész csomagok a Releases részbe kerülnek, verziónként egy kiadásba (v4.0 stb.).
+      # Ez nem számít bele az Actions tárhelyébe (a privát repóhoz abból csak 0,5 GB jár).
+      # A Linux és Mac csomag belső tömörítése megőrzi a futtatási jogot.
+      - name: Feltöltés a Releases részbe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(python -c "import re; print(re.search(r'APP_VERSION = \"([^\"]+)\"', open('PHDL.py', encoding='utf-8').read()).group(1))")
+          TAG="v$VER"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Vid-Ripper $VER" --notes "Vid-Ripper $VER" --target "$GITHUB_SHA" || true
+          sleep 5
+          shopt -s nullglob
+          gh release upload "$TAG" dist/*.zip dist/*.tar.gz dist/*.sh --clobber

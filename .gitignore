@@ -1,0 +1,7 @@
+dist/
+build/
+phdl-env/
+*.spec
+icon.ico
+icon.icns
+__pycache__/
